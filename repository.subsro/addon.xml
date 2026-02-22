@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="repository.subsro" name="Subs.ro Repository" version="1.0.0" provider-name="subs.ro">
+    <extension point="xbmc.addon.repository" name="Subs.ro Repository">
+        <dir>
+            <info compressed="false">https://raw.githubusercontent.com/triffalin/repository.subsro/main/zips/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/triffalin/repository.subsro/main/zips/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/triffalin/repository.subsro/main/zips/</datadir>
+        </dir>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en">Subs.ro Kodi Repository</summary>
+        <summary lang="ro">Repository Kodi Subs.ro</summary>
+        <description lang="en">Official Kodi repository for subs.ro subtitle addon. Provides Romanian subtitles for movies and TV shows.</description>
+        <description lang="ro">Repository oficial Kodi pentru addon-ul de subtitrari subs.ro. Subtitrari romanesti pentru filme si seriale.</description>
+        <platform>all</platform>
+        <assets>
+            <icon>icon.png</icon>
+        </assets>
+    </extension>
+</addon>

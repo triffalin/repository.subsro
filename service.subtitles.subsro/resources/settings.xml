@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings version="2">
+    <section id="general">
+        <category id="account" label="32000">
+            <group id="1">
+                <setting id="api_key" type="string" label="32001">
+                    <default></default>
+                    <constraints allowempty="true"/>
+                </setting>
+            </group>
+        </category>
+        <category id="preferences" label="32010">
+            <group id="2">
+                <setting id="preferred_language" type="select" label="32011">
+                    <options>
+                        <option label="Romanian" value="ro"/>
+                        <option label="English" value="en"/>
+                        <option label="Italian" value="ita"/>
+                        <option label="French" value="fra"/>
+                        <option label="German" value="ger"/>
+                        <option label="Hungarian" value="ung"/>
+                        <option label="Greek" value="gre"/>
+                        <option label="Portuguese" value="por"/>
+                        <option label="Spanish" value="spa"/>
+                        <option label="All" value=""/>
+                    </options>
+                    <default>ro</default>
+                </setting>
+                <setting id="enable_logging" type="boolean" label="32020">
+                    <default>false</default>
+                </setting>
+            </group>
+        </category>
+    </section>
+</settings>

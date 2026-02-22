@@ -1,0 +1,47 @@
+# Kodi Media Center language file
+# Addon Name: Subs.ro
+# Addon id: service.subtitles.subsro
+msgid ""
+msgstr ""
+"Language: en_GB\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgctxt "#32000"
+msgid "Account"
+msgstr "Account"
+
+msgctxt "#32001"
+msgid "API Key"
+msgstr "API Key"
+
+msgctxt "#32010"
+msgid "Preferences"
+msgstr "Preferences"
+
+msgctxt "#32011"
+msgid "Preferred Language"
+msgstr "Preferred Language"
+
+msgctxt "#32020"
+msgid "Enable debug logging"
+msgstr "Enable debug logging"
+
+msgctxt "#32031"
+msgid "Please set your subs.ro API key in addon settings."
+msgstr "Please set your subs.ro API key in addon settings."
+
+msgctxt "#32032"
+msgid "No subtitles found"
+msgstr "No subtitles found"
+
+msgctxt "#32033"
+msgid "Download failed"
+msgstr "Download failed"
+
+msgctxt "#32034"
+msgid "Daily quota exceeded"
+msgstr "Daily quota exceeded"
+
+msgctxt "#32035"
+msgid "Could not extract subtitle from archive"
+msgstr "Could not extract subtitle from archive"
