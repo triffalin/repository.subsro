@@ -1,6 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <addons>
 <addon id="repository.subsro" name="Subs.ro Repository" version="1.0.0" provider-name="subs.ro">
+    <requires>
+        <import addon="xbmc.addon" version="12.0.0"/>
+    </requires>
     <extension point="xbmc.addon.repository" name="Subs.ro Repository">
         <dir>
             <info compressed="false">https://triffalin.github.io/repository.subsro/zips/addons.xml</info>
@@ -19,14 +22,14 @@
 </addon>
 <addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.0" provider-name="subs.ro">
     <requires>
-        <import addon="xbmc.python" version="3.0.0" />
+        <import addon="xbmc.python" version="3.0.0"/>
     </requires>
-    <extension point="xbmc.python.subtitles" library="default.py" />
+    <extension point="xbmc.subtitle.module" library="service.py"/>
     <extension point="xbmc.addon.metadata">
         <summary lang="en">Subs.ro subtitle provider for Kodi</summary>
         <summary lang="ro">Provider de subtitrari subs.ro pentru Kodi</summary>
-        <description lang="en">Search and download subtitles from subs.ro - the largest Romanian subtitle database.</description>
-        <description lang="ro">Cauta si descarca subtitrari de pe subs.ro - cea mai mare baza de date de subtitrari romanesti.</description>
+        <description lang="en">Search and download subtitles from subs.ro - the largest Romanian subtitle database. Supports movies and TV shows with Romanian, English and other languages.</description>
+        <description lang="ro">Cauta si descarca subtitrari de pe subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta filme si seriale cu subtitrari in romana, engleza si alte limbi.</description>
         <platform>all</platform>
         <license>GPL-3.0</license>
     </extension>
