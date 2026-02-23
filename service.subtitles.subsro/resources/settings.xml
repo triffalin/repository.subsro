@@ -1,33 +1,45 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<settings version="2">
-    <section id="general">
+<?xml version="1.0" ?>
+<settings version="1">
+    <section id="service.subtitles.subsro">
         <category id="account" label="32000">
             <group id="1">
                 <setting id="api_key" type="string" label="32001">
+                    <level>0</level>
                     <default></default>
-                    <constraints allowempty="true"/>
+                    <constraints>
+                        <allowempty>true</allowempty>
+                    </constraints>
+                    <control type="edit" format="string">
+                        <heading>32001</heading>
+                    </control>
                 </setting>
             </group>
         </category>
         <category id="preferences" label="32010">
-            <group id="2">
-                <setting id="preferred_language" type="select" label="32011">
-                    <options>
-                        <option label="Romanian" value="ro"/>
-                        <option label="English" value="en"/>
-                        <option label="Italian" value="ita"/>
-                        <option label="French" value="fra"/>
-                        <option label="German" value="ger"/>
-                        <option label="Hungarian" value="ung"/>
-                        <option label="Greek" value="gre"/>
-                        <option label="Portuguese" value="por"/>
-                        <option label="Spanish" value="spa"/>
-                        <option label="All" value=""/>
-                    </options>
+            <group id="1">
+                <setting id="preferred_language" type="string" label="32011">
+                    <level>0</level>
                     <default>ro</default>
+                    <constraints>
+                        <allowempty>false</allowempty>
+                    </constraints>
+                    <control type="select">
+                        <option label="Romanian">ro</option>
+                        <option label="English">en</option>
+                        <option label="Italian">ita</option>
+                        <option label="French">fra</option>
+                        <option label="German">ger</option>
+                        <option label="Hungarian">ung</option>
+                        <option label="Greek">gre</option>
+                        <option label="Portuguese">por</option>
+                        <option label="Spanish">spa</option>
+                        <option label="Other">alt</option>
+                    </control>
                 </setting>
                 <setting id="enable_logging" type="boolean" label="32020">
+                    <level>0</level>
                     <default>false</default>
+                    <control type="toggle"/>
                 </setting>
             </group>
         </category>
