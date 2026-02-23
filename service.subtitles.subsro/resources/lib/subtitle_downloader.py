@@ -46,6 +46,7 @@ class SubtitleDownloader:
         self.query = {}
         self.subtitles = {}
         self.file = {}
+        self.subsro = None
 
         try:
             self.subsro = SubsroProvider(self.api_key)
@@ -53,40 +54,43 @@ class SubtitleDownloader:
             error(__name__, 32002, e)
 
     def handle_action(self):
-        log(__name__, "action '%s' called" % self.params["action"])
-        if self.params["action"] == "manualsearch":
+        log(__name__, "action '%s' called" % self.params.get("action", ""))
+        if self.params.get("action") == "manualsearch":
             self.search(self.params.get("searchstring", ""))
-        elif self.params["action"] == "search":
+        elif self.params.get("action") == "search":
             self.search()
-        elif self.params["action"] == "download":
+        elif self.params.get("action") == "download":
             self.download()
 
     def search(self, query=""):
+        if not self.subsro:
+            log(__name__, "No provider - API key not configured")
+            return
+
         file_data = get_file_data(get_file_path())
         language_data = get_language_data(self.params)
 
         log(__name__, "file_data '%s' " % file_data)
         log(__name__, "language_data '%s' " % language_data)
 
-        # if there's query passed we use it, don't try to pull media data from VideoPlayer
         if query:
             media_data = {"query": query}
         else:
             media_data = get_media_data()
-            # Only use basename as fallback if no query was set by media data collection
             if "basename" in file_data and not media_data.get("query"):
                 media_data["query"] = file_data["basename"]
-                log(__name__, "Using basename as query fallback: {}".format(file_data["basename"]))
-            elif media_data.get("query"):
-                log(__name__, "Using parsed query from media_data: {}".format(media_data["query"]))
             log(__name__, "media_data '%s' " % media_data)
 
         self.query = {**media_data, **file_data, **language_data}
 
         try:
             self.subtitles = self.subsro.search_subtitles(self.query)
+        except AuthenticationError as e:
+            error(__name__, 32003, e)
+            return
         except (TooManyRequests, ServiceUnavailable, ProviderError, ValueError) as e:
             error(__name__, 32001, e)
+            return
 
         if self.subtitles and len(self.subtitles):
             log(__name__, len(self.subtitles))
@@ -98,6 +102,10 @@ class SubtitleDownloader:
         valid = 1
         subtitle_id = self.params.get("id", "")
         language = self.params.get("language", "ro")
+
+        if not self.subsro:
+            log(__name__, "No provider - API key not configured")
+            return
 
         try:
             archive_content = self.subsro.download_subtitle(subtitle_id)
@@ -155,7 +163,6 @@ class SubtitleDownloader:
                 language_name = SUBSRO_TO_LANG.get(language_code, "Romanian")
                 flag_code = SUBSRO_TO_FLAG.get(language_code, "ro")
 
-                # Build display name
                 title = subtitle.get("title", "")
                 release = subtitle.get("release", "")
                 translator = subtitle.get("translator", "")
@@ -172,7 +179,6 @@ class SubtitleDownloader:
                     label2=clean_name
                 )
 
-                # Rating icon (0-5 scale for Kodi)
                 rating = subtitle.get("ratings") or subtitle.get("downloads") or 0
                 try:
                     rating_icon = str(min(5, max(0, int(round(float(rating) / 2)))))
@@ -184,7 +190,7 @@ class SubtitleDownloader:
                     "thumb": flag_code
                 })
 
-                list_item.setProperty("sync", "false")  # subs.ro does not support moviehash
+                list_item.setProperty("sync", "false")
                 list_item.setProperty("hearing_imp", "false")
 
                 subtitle_id = subtitle.get("id", "")
@@ -196,5 +202,4 @@ class SubtitleDownloader:
                 xbmcplugin.addDirectoryItem(
                     handle=self.handle, url=url, listitem=list_item, isFolder=False
                 )
-
-        xbmcplugin.endOfDirectory(self.handle)
+        # endOfDirectory is called by service.py — NOT here
