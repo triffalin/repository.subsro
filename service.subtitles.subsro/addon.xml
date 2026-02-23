@@ -2,17 +2,28 @@
 <addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.0" provider-name="subs.ro">
     <requires>
         <import addon="xbmc.python" version="3.0.0"/>
+        <import addon="xbmc.addon" version="12.0.0"/>
     </requires>
     <extension point="xbmc.subtitle.module" library="service.py"/>
     <extension point="xbmc.addon.metadata">
         <summary lang="en">Subs.ro subtitle provider for Kodi</summary>
         <summary lang="ro">Provider de subtitrari subs.ro pentru Kodi</summary>
-        <description lang="en">Search and download subtitles from subs.ro - the largest Romanian subtitle database. Supports movies and TV shows with Romanian, English and other languages.</description>
-        <description lang="ro">Cauta si descarca subtitrari de pe subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta filme si seriale cu subtitrari in romana, engleza si alte limbi.</description>
+        <description lang="en">Search and download subtitles from subs.ro - the largest Romanian subtitle database. Supports Romanian, English and many other languages.</description>
+        <description lang="ro">Cauta si descarca subtitrari de pe subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza si multe alte limbi.</description>
         <platform>all</platform>
-        <license>GPL-3.0</license>
+        <license>GPL-3.0-only</license>
+        <website>https://subs.ro</website>
         <assets>
-            <icon>resources/icon.png</icon>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
         </assets>
+        <news>
+v1.0.0
+- Initial release
+- Search by IMDB ID, title, release name
+- Support for Romanian, English and 8 other languages
+- ZIP and RAR archive extraction
+- TV show season/episode filtering
+        </news>
     </extension>
 </addon>
