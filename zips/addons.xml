@@ -20,7 +20,7 @@
         <assets><icon>icon.png</icon></assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.0" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.1" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />

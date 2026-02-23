@@ -1,3 +1,8 @@
+v1.0.1 (2026-02-23)
+- Fix: Configure button (settings.xml packaged correctly)
+- Fix: removed legacy files (kodi_utils.py, logger.py, subsro_api.py)
+- Fix: icon and fanart assets included
+
 v1.0.0 (2026-02-23)
 - Initial release
 - Search subtitles by IMDB ID, TMDB ID, title, release name
