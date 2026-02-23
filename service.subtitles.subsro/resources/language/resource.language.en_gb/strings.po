@@ -1,47 +1,52 @@
 # Kodi Media Center language file
 # Addon Name: Subs.ro
 # Addon id: service.subtitles.subsro
+# Addon Provider: subs.ro
 msgid ""
 msgstr ""
+"Project-Id-Version: service.subtitles.subsro\n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: 2026-02-23 00:00+0000\n"
+"Last-Translator: subs.ro\n"
+"Language-Team: English\n"
 "Language: en_GB\n"
+"MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-msgctxt "#32000"
+msgctxt "#32001"
+msgid "Unknown error. Please try again."
+msgstr "Unknown error. Please try again."
+
+msgctxt "#32002"
+msgid "Please configure your subs.ro API key in addon settings."
+msgstr "Please configure your subs.ro API key in addon settings."
+
+msgctxt "#32003"
+msgid "Authentication failed. Please check your API key."
+msgstr "Authentication failed. Please check your API key."
+
+msgctxt "#32004"
+msgid "Daily download limit reached. Please try again tomorrow."
+msgstr "Daily download limit reached. Please try again tomorrow."
+
+msgctxt "#32100"
 msgid "Account"
 msgstr "Account"
 
-msgctxt "#32001"
-msgid "API Key"
-msgstr "API Key"
-
-msgctxt "#32010"
+msgctxt "#32102"
 msgid "Preferences"
 msgstr "Preferences"
 
-msgctxt "#32011"
+msgctxt "#32201"
+msgid "API Key"
+msgstr "API Key"
+
+msgctxt "#32211"
 msgid "Preferred Language"
 msgstr "Preferred Language"
 
-msgctxt "#32020"
+msgctxt "#32220"
 msgid "Enable debug logging"
 msgstr "Enable debug logging"
-
-msgctxt "#32031"
-msgid "Please set your subs.ro API key in addon settings."
-msgstr "Please set your subs.ro API key in addon settings."
-
-msgctxt "#32032"
-msgid "No subtitles found"
-msgstr "No subtitles found"
-
-msgctxt "#32033"
-msgid "Download failed"
-msgstr "Download failed"
-
-msgctxt "#32034"
-msgid "Daily quota exceeded"
-msgstr "Daily quota exceeded"
-
-msgctxt "#32035"
-msgid "Could not extract subtitle from archive"
-msgstr "Could not extract subtitle from archive"
