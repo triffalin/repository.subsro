@@ -12,7 +12,7 @@ API_SEARCH = "/search/{field}/{value}"
 API_DOWNLOAD = "/subtitle/{id}/download"
 API_QUOTA = "/quota"
 
-USER_AGENT = "Kodi Subs.ro v1.0.0"
+USER_AGENT = "Kodi Subs.ro v1.0.4"
 CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT = 30
 
@@ -71,6 +71,25 @@ def iso_to_subsro(iso_code):
     return ISO_TO_SUBSRO.get(iso_lower)  # None if unsupported — filtered out by caller
 
 
+def _ensure_tt_prefix(imdb_id):
+    """
+    Ensure IMDB ID has the 'tt' prefix required by subs.ro API.
+
+    The subs.ro API requires IMDB IDs in the format 'tt1234567'.
+    Kodi/data_collector strips the 'tt' prefix and stores just the numeric part,
+    so we need to add it back before sending to the API.
+    """
+    if not imdb_id:
+        return None
+    s = str(imdb_id).strip()
+    if s.startswith("tt"):
+        return s
+    # Pad to at least 7 digits (IMDB standard)
+    if s.isdigit():
+        return "tt{}".format(s.zfill(7))
+    return None
+
+
 def logging(msg):
     return log(__name__, msg)
 
@@ -117,10 +136,11 @@ class SubsroProvider:
 
         if query.get("imdb_id") and not query.get("tv_show_title"):
             search_field = "imdbid"
-            search_value = str(query["imdb_id"])
+            # subs.ro API requires 'tt' prefix for IMDB IDs
+            search_value = _ensure_tt_prefix(query["imdb_id"])
         elif query.get("parent_imdb_id") and query.get("tv_show_title"):
             search_field = "imdbid"
-            search_value = str(query["parent_imdb_id"])
+            search_value = _ensure_tt_prefix(query["parent_imdb_id"])
         elif query.get("tmdb_id") and not query.get("tv_show_title"):
             search_field = "tmdbid"
             search_value = str(query["tmdb_id"])
@@ -156,8 +176,22 @@ class SubsroProvider:
                 results = self._search_api(search_field, search_value, language=lang)
                 if results:
                     all_results.extend(results)
+
+            # Fallback: if language-specific search returned nothing, try without language filter
+            if not all_results:
+                logging("No results with language filter, retrying without language parameter")
+                results = self._search_api(search_field, search_value)
+                if results:
+                    all_results.extend(results)
         else:
             results = self._search_api(search_field, search_value)
+            if results:
+                all_results.extend(results)
+
+        # Fallback: if IMDB search returned nothing, try title search
+        if not all_results and search_field == "imdbid" and query.get("query"):
+            logging("No results by IMDB ID, falling back to title search: {}".format(query["query"]))
+            results = self._search_api("title", str(query["query"]))
             if results:
                 all_results.extend(results)
 
@@ -210,12 +244,26 @@ class SubsroProvider:
 
         try:
             result = r.json()
-            logging("Search response JSON keys: {}".format(list(result.keys()) if result else None))
+            logging("Search response JSON keys: {}".format(list(result.keys()) if isinstance(result, dict) else type(result).__name__))
         except ValueError:
             raise ProviderError("Invalid JSON response from subs.ro")
 
-        results = result.get("results", [])
+        # subs.ro API returns subtitle list in the "items" field (not "results")
+        # Also handle "results" as fallback for forward-compatibility
+        if isinstance(result, dict):
+            results = result.get("items") or result.get("results") or []
+        elif isinstance(result, list):
+            # In case the API returns a bare list
+            results = result
+        else:
+            results = []
+
         logging("API returned {} results".format(len(results)))
+
+        # Log first result keys for debugging (helps identify response structure)
+        if results and isinstance(results[0], dict):
+            logging("First result keys: {}".format(list(results[0].keys())))
+
         return results
 
     def _filter_tv_results(self, results, season, episode):

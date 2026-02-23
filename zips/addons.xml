@@ -1,6 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <addons>
 <addon id="repository.subsro" name="Subs.ro Repository" version="1.0.0" provider-name="subs.ro">
+    <requires>
+        <import addon="xbmc.addon" version="12.0.0" />
+    </requires>
     <extension point="xbmc.addon.repository" name="Subs.ro Repository">
         <dir>
             <info compressed="false">https://triffalin.github.io/repository.subsro/zips/addons.xml</info>
@@ -19,7 +22,7 @@
         </assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.3" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.4" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />
@@ -32,6 +35,12 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.4 (2026-02-23)
+- Fix: IMDB IDs now sent with required 'tt' prefix (e.g. tt14142060 instead of 14142060)
+- Fix: API response parsing now reads 'items' field (was incorrectly reading 'results')
+- Add: Fallback search without language filter when language-specific search returns nothing
+- Add: Title-based fallback search when IMDB ID search returns no results
+
 v1.0.3 (2026-02-23)
 - Fix: unsupported language codes (e.g. Russian) no longer cause HTTP 400 / Unknown error
 - Unsupported languages are silently skipped; search continues for supported ones
