@@ -68,7 +68,7 @@ def iso_to_subsro(iso_code):
     if not iso_code:
         return None
     iso_lower = iso_code.lower().strip()
-    return ISO_TO_SUBSRO.get(iso_lower, iso_lower)
+    return ISO_TO_SUBSRO.get(iso_lower)  # None if unsupported — filtered out by caller
 
 
 def logging(msg):
