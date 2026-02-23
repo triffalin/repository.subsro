@@ -42,6 +42,58 @@ def create_zip(addon_id, version, source_dir, out_dir):
     print("[OK] {}-{}.zip ({} bytes)".format(addon_id, version, os.path.getsize(zip_path)))
 
 
+def generate_index_html(addon_id, version, out_dir):
+    """Generate index.html for each addon zip directory.
+
+    This ensures GitHub Pages serves a browsable directory listing that
+    matches the actual zip filename, preventing version drift between
+    the zip on disk and the HTML link that Kodi follows.
+    """
+    zip_filename = "{}-{}.zip".format(addon_id, version)
+    html = (
+        '<!DOCTYPE html>\n'
+        '<html>\n'
+        '<head><meta charset="UTF-8"><title>Index of /zips/{addon_id}/</title></head>\n'
+        '<body>\n'
+        '<h1>Index of /zips/{addon_id}/</h1>\n'
+        '<pre>\n'
+        '<a href="{zip_filename}">{zip_filename}</a>\n'
+        '</pre>\n'
+        '</body>\n'
+        '</html>\n'
+    ).format(addon_id=addon_id, zip_filename=zip_filename)
+    index_path = os.path.join(out_dir, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print("[OK] {}/index.html -> {}".format(addon_id, zip_filename))
+
+
+def generate_root_index_html(addon_ids):
+    """Generate the root zips/index.html listing all addons and metadata files."""
+    links = [
+        '<a href="addons.xml">addons.xml</a>',
+        '<a href="addons.xml.md5">addons.xml.md5</a>',
+    ]
+    for addon_id in sorted(addon_ids):
+        links.append('<a href="{id}/">{id}/</a>'.format(id=addon_id))
+    html = (
+        '<!DOCTYPE html>\n'
+        '<html>\n'
+        '<head><meta charset="UTF-8"><title>Index of /zips/</title></head>\n'
+        '<body>\n'
+        '<h1>Index of /zips/</h1>\n'
+        '<pre>\n'
+        '{links}\n'
+        '</pre>\n'
+        '</body>\n'
+        '</html>\n'
+    ).format(links="\n".join(links))
+    index_path = os.path.join(ZIPS_OUT, "index.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print("[OK] zips/index.html")
+
+
 def generate_addons_xml():
     lines = ["<?xml version='1.0' encoding='utf-8'?>", "<addons>"]
     for _, source_dir in ADDONS:
@@ -54,8 +106,14 @@ def generate_addons_xml():
 def main():
     print("=== Kodi Repo Generator ===\n")
     os.makedirs(ZIPS_OUT, exist_ok=True)
+    addon_ids = []
     for addon_id, source_dir in ADDONS:
-        create_zip(addon_id, get_version(source_dir), source_dir, os.path.join(ZIPS_OUT, addon_id))
+        version = get_version(source_dir)
+        addon_out_dir = os.path.join(ZIPS_OUT, addon_id)
+        create_zip(addon_id, version, source_dir, addon_out_dir)
+        generate_index_html(addon_id, version, addon_out_dir)
+        addon_ids.append(addon_id)
+    generate_root_index_html(addon_ids)
     addons_xml = generate_addons_xml()
     with open(os.path.join(ZIPS_OUT, "addons.xml"), "w", encoding="utf-8") as f:
         f.write(addons_xml)
@@ -63,7 +121,7 @@ def main():
     with open(os.path.join(ZIPS_OUT, "addons.xml.md5"), "w") as f:
         f.write(md5)
     print("[OK] addons.xml + md5 ({})\n".format(md5))
-    print("Done! git add zips/ && git commit -m 'chore: update repo' && git push")
+    print("Done! git add zips/ _repo_generator.py && git commit -m 'chore: update repo' && git push")
 
 
 if __name__ == "__main__":
