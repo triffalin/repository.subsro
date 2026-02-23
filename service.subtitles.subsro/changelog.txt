@@ -1,0 +1,8 @@
+v1.0.0 (2026-02-23)
+- Initial release
+- Search subtitles by IMDB ID, title, original title, release name
+- Support: Romanian, English, Italian, French, German, Hungarian, Greek, Portuguese, Spanish
+- ZIP and RAR archive extraction with encoding detection (UTF-8, CP1250, ISO-8859-2)
+- TV show season/episode smart filtering
+- Preferred language setting in addon preferences
+- Debug logging toggle
