@@ -270,7 +270,9 @@ def get_media_data():
         "parent_tmdb_id": None,
         "parent_imdb_id": None,
         "imdb_id": None,
-        "tmdb_id": None
+        "tmdb_id": None,
+        # v1.0.5: preserve episode IMDB ID separately for TV show fallback search
+        "episode_imdb_id": None
     }
     log(__name__, "Initial media data from InfoLabels: {}".format(item))
 
@@ -319,21 +321,26 @@ def get_media_data():
         except Exception as e:
             log(__name__, "Failed to read true parent IDs from InfoLabels: {}".format(e))
 
-        if not item.get("parent_imdb_id") and not item.get("parent_tmdb_id"):
-            try:
-                possible_episode_imdb = (xbmc.getInfoLabel("VideoPlayer.UniqueID(imdb)")
-                                         or xbmc.getInfoLabel("VideoPlayer.IMDBNumber")
-                                         or xbmc.getInfoLabel("ListItem.IMDBNumber"))
-                imdb_digits = _strip_imdb_tt(possible_episode_imdb)
-                if imdb_digits and 6 <= len(imdb_digits) <= 8:
+        # v1.0.5: Always try to collect episode-specific IMDB ID for fallback
+        # (even when parent IDs are already found)
+        try:
+            possible_episode_imdb = (xbmc.getInfoLabel("VideoPlayer.UniqueID(imdb)")
+                                     or xbmc.getInfoLabel("VideoPlayer.IMDBNumber")
+                                     or xbmc.getInfoLabel("ListItem.IMDBNumber"))
+            imdb_digits = _strip_imdb_tt(possible_episode_imdb)
+            if imdb_digits and 6 <= len(imdb_digits) <= 8:
+                item["episode_imdb_id"] = int(imdb_digits)
+                log(__name__, "Episode-specific IMDb ID: {}".format(item["episode_imdb_id"]))
+                # Also set imdb_id if no parent IDs found (backward compat)
+                if not item.get("parent_imdb_id") and not item.get("parent_tmdb_id"):
                     item["imdb_id"] = int(imdb_digits)
-                    log(__name__, "Episode-specific IMDb ID: {}".format(item["imdb_id"]))
-                possible_episode_tmdb = xbmc.getInfoLabel("VideoPlayer.UniqueID(tmdb)")
-                if possible_episode_tmdb and possible_episode_tmdb.isdigit():
+            possible_episode_tmdb = xbmc.getInfoLabel("VideoPlayer.UniqueID(tmdb)")
+            if possible_episode_tmdb and possible_episode_tmdb.isdigit():
+                if not item.get("parent_imdb_id") and not item.get("parent_tmdb_id"):
                     item["tmdb_id"] = int(possible_episode_tmdb)
                     log(__name__, "Episode-specific TMDb ID: {}".format(item["tmdb_id"]))
-            except Exception as e:
-                log(__name__, "Failed to read episode IDs from InfoLabels: {}".format(e))
+        except Exception as e:
+            log(__name__, "Failed to read episode IDs from InfoLabels: {}".format(e))
 
         tvshowid_str = str(item.get("tvshowid", ""))
         if len(tvshowid_str) != 0 and (not item["parent_tmdb_id"] or not item["parent_imdb_id"]):
@@ -383,8 +390,8 @@ def get_media_data():
             ep_imdb = xbmc.getInfoLabel("VideoPlayer.UniqueID(imdbepisode)")
             ep_imdb_digits = _strip_imdb_tt(ep_imdb)
             if ep_imdb_digits and ep_imdb_digits.isdigit():
-                item["imdb_id"] = int(ep_imdb_digits)
-                log(__name__, "Dedicated Episode IMDb ID: {}".format(item["imdb_id"]))
+                item["episode_imdb_id"] = int(ep_imdb_digits)
+                log(__name__, "Dedicated Episode IMDb ID: {}".format(item["episode_imdb_id"]))
         except Exception as e:
             log(__name__, "Failed to read dedicated episode IDs: {}".format(e))
 
@@ -431,6 +438,11 @@ def get_media_data():
         if v in (0, "0", "", None):
             item[k] = None
 
+    # Clean episode_imdb_id too
+    ep_imdb = item.get("episode_imdb_id")
+    if ep_imdb in (0, "0", "", None):
+        item["episode_imdb_id"] = None
+
     if item.get("parent_tmdb_id") and item.get("parent_imdb_id"):
         log(__name__, "Both parent IDs found, preferring IMDB ID: {}".format(item["parent_imdb_id"]))
         item["parent_tmdb_id"] = None
@@ -440,17 +452,23 @@ def get_media_data():
         item["tmdb_id"] = None
 
     # ---------- Final ID Strategy Selection (TV Episodes Only) ----------
+    # v1.0.5: Keep episode_imdb_id as fallback even when parent_imdb_id is primary
     if item.get("tv_show_title"):
         if item.get("parent_imdb_id"):
+            # Primary: search by parent show IMDB ID
             item["parent_tmdb_id"] = None
             item["imdb_id"] = None
             item["tmdb_id"] = None
-            log(__name__, "Final Strategy: parent_imdb_id={} + season/episode".format(item["parent_imdb_id"]))
+            # episode_imdb_id is PRESERVED for fallback search in provider.py
+            log(__name__, "Final Strategy: parent_imdb_id={} + season/episode (episode_imdb_id={} kept as fallback)".format(
+                item["parent_imdb_id"], item.get("episode_imdb_id")))
         elif item.get("parent_tmdb_id"):
             item["parent_imdb_id"] = None
             item["imdb_id"] = None
             item["tmdb_id"] = None
-            log(__name__, "Final Strategy: parent_tmdb_id={} + season/episode".format(item["parent_tmdb_id"]))
+            # episode_imdb_id preserved for fallback
+            log(__name__, "Final Strategy: parent_tmdb_id={} + season/episode (episode_imdb_id={} kept as fallback)".format(
+                item["parent_tmdb_id"], item.get("episode_imdb_id")))
         elif item.get("imdb_id"):
             item["parent_imdb_id"] = None
             item["parent_tmdb_id"] = None
@@ -483,10 +501,11 @@ def get_media_data():
     if "tvshowid" in item:
         del item["tvshowid"]
 
-    log(__name__, "Media data result: {} - IMDb:{} TMDb:{}".format(
+    log(__name__, "Media data result: {} - IMDb:{} TMDb:{} EpIMDb:{}".format(
         item.get("query"),
         item.get("imdb_id") or item.get("parent_imdb_id"),
-        item.get("tmdb_id") or item.get("parent_tmdb_id")
+        item.get("tmdb_id") or item.get("parent_tmdb_id"),
+        item.get("episode_imdb_id")
     ))
     return item
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="service.subtitles.subsro"
        name="Subs.ro"
-       version="1.0.4"
+       version="1.0.5"
        provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0"/>
@@ -16,6 +16,18 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.5 (2026-02-24)
+- Fix: TV show/series subtitle search completely rewritten
+- Fix: Search by show IMDB ID (parent) with episode IMDB ID as fallback
+- Fix: Filter results using title/description fields (API has no season/episode fields)
+- Fix: Smart cascading filter: exact episode > season-only > untagged packs > all results
+- Fix: Episode-aware archive extraction picks correct S01E05 file from multi-episode ZIPs
+- Fix: Season/episode passed through download URL to archive extractor
+- Fix: Preserve episode_imdb_id alongside parent_imdb_id for fallback search
+- Add: Title+S01E05 fallback search when IMDB ID returns no results
+- Add: Description field used in subtitle display (API returns description, not release)
+- Add: Romanian season patterns (Sezonul/Episodul) recognized in filtering
+
 v1.0.4 (2026-02-23)
 - Fix: IMDB IDs now sent with required 'tt' prefix (e.g. tt14142060 instead of 14142060)
 - Fix: API response parsing now reads 'items' field (was incorrectly reading 'results')

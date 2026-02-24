@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="repository.subsro" name="Subs.ro Repository" version="1.0.0" provider-name="subs.ro">
+    <requires>
+        <import addon="xbmc.addon" version="12.0.0"/>
+    </requires>
     <extension point="xbmc.addon.repository" name="Subs.ro Repository">
         <dir>
             <info compressed="false">https://triffalin.github.io/repository.subsro/zips/addons.xml</info>

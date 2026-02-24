@@ -102,6 +102,9 @@ class SubtitleDownloader:
         valid = 1
         subtitle_id = self.params.get("id", "")
         language = self.params.get("language", "ro")
+        # v1.0.5: Pass season/episode to extraction for TV show episode matching
+        season = self.params.get("season")
+        episode = self.params.get("episode")
 
         if not self.subsro:
             log(__name__, "No provider - API key not configured")
@@ -141,7 +144,11 @@ class SubtitleDownloader:
 
         if valid == 1 and archive_content:
             try:
-                extracted_path = extract_subtitle(archive_content, dir_path)
+                # v1.0.5: Pass season/episode for TV show episode-aware extraction
+                extracted_path = extract_subtitle(
+                    archive_content, dir_path,
+                    season=season, episode=episode
+                )
                 if extracted_path:
                     subtitle_path = extracted_path
                     log(__name__, "Subtitle extracted: {}".format(subtitle_path))
@@ -158,6 +165,10 @@ class SubtitleDownloader:
     def list_subtitles(self):
         """Display subtitle results as Kodi ListItems."""
         if self.subtitles:
+            # v1.0.5: Get season/episode from query for passing to download URL
+            season = self.query.get("season_number", "")
+            episode = self.query.get("episode_number", "")
+
             for subtitle in self.subtitles:
                 language_code = subtitle.get("language", "ro")
                 language_name = SUBSRO_TO_LANG.get(language_code, "Romanian")
@@ -165,10 +176,14 @@ class SubtitleDownloader:
 
                 title = subtitle.get("title", "")
                 release = subtitle.get("release", "")
+                description = subtitle.get("description", "")
                 translator = subtitle.get("translator", "")
                 year = subtitle.get("year", "")
 
-                clean_name = clean_feature_release_name(title, release)
+                # v1.0.5: Use description as fallback when release is empty
+                # (subs.ro API returns description but not release for TV shows)
+                display_release = release or description
+                clean_name = clean_feature_release_name(title, display_release)
                 if translator:
                     clean_name = "{} [{}]".format(clean_name, translator)
                 if year:
@@ -194,12 +209,15 @@ class SubtitleDownloader:
                 list_item.setProperty("hearing_imp", "false")
 
                 subtitle_id = subtitle.get("id", "")
+                # v1.0.5: Include season/episode in download URL for archive extraction
                 url = "plugin://{}/?action=download&id={}&language={}".format(
                     __scriptid__, subtitle_id, language_code
                 )
+                if season and episode:
+                    url += "&season={}&episode={}".format(season, episode)
 
                 log(__name__, "Adding: {} - {}".format(language_name, clean_name))
                 xbmcplugin.addDirectoryItem(
                     handle=self.handle, url=url, listitem=list_item, isFolder=False
                 )
-        # endOfDirectory is called by service.py — NOT here
+        # endOfDirectory is called by service.py -- NOT here

@@ -5,9 +5,12 @@ Archive extraction utilities for subtitle files.
 Supports ZIP archives natively and RAR archives when the rarfile
 library is available. Falls back to treating raw data as a plain
 subtitle file if it is not a recognized archive format.
+
+v1.0.5: Added season/episode-aware subtitle selection for TV show archives.
 """
 
 import os
+import re
 import zipfile
 import io
 
@@ -26,8 +29,13 @@ except ImportError:
     log(__name__, "rarfile library not available - RAR support disabled")
 
 
-def _find_subtitle_in_names(names):
-    """Find the best subtitle file from a list of archive member names."""
+def _find_subtitle_in_names(names, season=None, episode=None):
+    """
+    Find the best subtitle file from a list of archive member names.
+
+    v1.0.5: When season/episode are provided, prefer files that match
+    the requested episode (e.g., S02E05 in the filename).
+    """
     candidates = []
     for name in names:
         if "__MACOSX" in name or name.startswith("."):
@@ -37,11 +45,74 @@ def _find_subtitle_in_names(names):
             continue
         _, ext = os.path.splitext(basename.lower())
         if ext in SUBTITLE_EXTENSIONS:
-            candidates.append((name, ext))
+            candidates.append((name, ext, basename))
 
     if not candidates:
         return None
 
+    # If season/episode provided, try to find matching file
+    if season is not None and episode is not None:
+        try:
+            season_int = int(season)
+            episode_int = int(episode)
+        except (ValueError, TypeError):
+            season_int = None
+            episode_int = None
+
+        if season_int is not None and episode_int is not None:
+            # Build patterns to match the specific episode in filenames
+            episode_patterns = [
+                # S01E05, s01e05, S1E5
+                re.compile(r"[Ss]0?{s}[Ee]0?{e}(?:\b|[^0-9])".format(
+                    s=season_int, e=episode_int)),
+                # 1x05, 01x05
+                re.compile(r"\b0?{s}[xX]0?{e:02d}\b".format(
+                    s=season_int, e=episode_int)),
+                # E05 (episode only, when archive is season-specific)
+                re.compile(r"(?:^|[^0-9])[Ee]0?{e}(?:\b|[^0-9])".format(
+                    e=episode_int)),
+            ]
+
+            # Score each candidate for episode matching
+            episode_matches = []
+            season_matches = []
+            for name, ext, basename in candidates:
+                searchable = basename
+                matched_episode = False
+                for pattern in episode_patterns:
+                    if pattern.search(searchable):
+                        episode_matches.append((name, ext, basename))
+                        matched_episode = True
+                        break
+
+                if not matched_episode:
+                    # Check if it at least matches the season
+                    season_pattern = re.compile(
+                        r"[Ss]0?{s}[Ee]|[Ss]ezon(?:ul)?\s*0?{s}\b|\b0?{s}[xX]\d".format(
+                            s=season_int))
+                    if season_pattern.search(searchable):
+                        season_matches.append((name, ext, basename))
+
+            if episode_matches:
+                log(__name__, "Found {} episode-matching subtitle(s) for S{:02d}E{:02d}".format(
+                    len(episode_matches), season_int, episode_int))
+                # Sort by extension priority
+                priority = {".srt": 0, ".sub": 1, ".ass": 2, ".ssa": 3, ".txt": 4, ".smi": 5}
+                episode_matches.sort(key=lambda item: priority.get(item[1], 99))
+                log(__name__, "Selected: {}".format(episode_matches[0][2]))
+                return episode_matches[0][0]
+
+            if season_matches:
+                log(__name__, "No exact episode match, found {} season-matching subtitle(s)".format(
+                    len(season_matches)))
+                # Fall through to default selection from season matches
+                priority = {".srt": 0, ".sub": 1, ".ass": 2, ".ssa": 3, ".txt": 4, ".smi": 5}
+                season_matches.sort(key=lambda item: priority.get(item[1], 99))
+                return season_matches[0][0]
+
+            log(__name__, "No episode/season match found in archive filenames, using default selection")
+
+    # Default: sort by extension priority and return first
     priority = {".srt": 0, ".sub": 1, ".ass": 2, ".ssa": 3, ".txt": 4, ".smi": 5}
     candidates.sort(key=lambda item: priority.get(item[1], 99))
 
@@ -99,7 +170,7 @@ def _write_subtitle_file(data, dest_path):
             return None
 
 
-def _extract_from_zip(archive_bytes, dest_dir):
+def _extract_from_zip(archive_bytes, dest_dir, season=None, episode=None):
     """Extract subtitle from a ZIP archive."""
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
@@ -108,7 +179,7 @@ def _extract_from_zip(archive_bytes, dest_dir):
                 n=len(names), files=", ".join(names[:10])
             ))
 
-            target = _find_subtitle_in_names(names)
+            target = _find_subtitle_in_names(names, season=season, episode=episode)
             if not target:
                 log(__name__, "No subtitle file found in ZIP archive")
                 return None
@@ -126,7 +197,7 @@ def _extract_from_zip(archive_bytes, dest_dir):
         return None
 
 
-def _extract_from_rar(archive_bytes, dest_dir):
+def _extract_from_rar(archive_bytes, dest_dir, season=None, episode=None):
     """Extract subtitle from a RAR archive using the rarfile library."""
     if not HAS_RARFILE:
         log(__name__, "RAR archive detected but rarfile library is not available.")
@@ -143,7 +214,7 @@ def _extract_from_rar(archive_bytes, dest_dir):
                 n=len(names), files=", ".join(names[:10])
             ))
 
-            target = _find_subtitle_in_names(names)
+            target = _find_subtitle_in_names(names, season=season, episode=episode)
             if not target:
                 log(__name__, "No subtitle file found in RAR archive")
                 return None
@@ -180,7 +251,7 @@ def _try_as_plain_subtitle(data, dest_dir):
     return None
 
 
-def extract_subtitle(archive_bytes, dest_dir):
+def extract_subtitle(archive_bytes, dest_dir, season=None, episode=None):
     """
     Extract a subtitle file from archive bytes.
 
@@ -192,6 +263,8 @@ def extract_subtitle(archive_bytes, dest_dir):
     Args:
         archive_bytes: Raw bytes of the downloaded archive or subtitle file.
         dest_dir: Directory to extract the subtitle into. Created if needed.
+        season: Season number (str or int) for TV episode matching. Optional.
+        episode: Episode number (str or int) for TV episode matching. Optional.
 
     Returns:
         Absolute path to the extracted subtitle file, or None on failure.
@@ -202,15 +275,15 @@ def extract_subtitle(archive_bytes, dest_dir):
 
     _ensure_dest_dir(dest_dir)
 
-    log(__name__, "Attempting to extract subtitle from {size} bytes to {dir}".format(
-        size=len(archive_bytes), dir=dest_dir
+    log(__name__, "Attempting to extract subtitle from {size} bytes to {dir} (S={s} E={e})".format(
+        size=len(archive_bytes), dir=dest_dir, s=season, e=episode
     ))
 
-    result = _extract_from_zip(archive_bytes, dest_dir)
+    result = _extract_from_zip(archive_bytes, dest_dir, season=season, episode=episode)
     if result:
         return result
 
-    result = _extract_from_rar(archive_bytes, dest_dir)
+    result = _extract_from_rar(archive_bytes, dest_dir, season=season, episode=episode)
     if result:
         return result
 
