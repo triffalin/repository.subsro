@@ -22,7 +22,7 @@
         </assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.7" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.8" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />
@@ -35,6 +35,30 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.8 (2026-02-24)
+- CRITICAL FIX: Download "Attempt failed" error resolved
+  Root cause: download_subtitle() sent Accept: application/json and
+  Content-Type: application/json headers to the download endpoint.
+  The API returned JSON error instead of binary ZIP/RAR archive data.
+  Fix: download requests now send Accept: */* with only the API key header,
+  matching the Stremio addon behavior (proxy.js only sends X-Subs-Api-Key).
+- CRITICAL FIX: download() no longer calls addDirectoryItem with non-existent
+  file path when extraction fails. Previously, any download/extraction error
+  still passed a phantom path to Kodi, causing "Attempt failed" dialog.
+  Now: errors return early, letting endOfDirectory signal no subtitle.
+- Fix: archive_content variable initialized before try/except block to prevent
+  UnboundLocalError when AuthenticationError or DownloadLimitExceeded is raised
+- Fix: Directory cleanup uses os.path.isdir() instead of xbmcvfs.exists()
+  which requires trailing path separator for directories (returned False always)
+- Fix: Empty subtitle_id caught early with descriptive log message
+- Fix: Download response Content-Type validated -- JSON responses from download
+  endpoint are now detected and reported as errors instead of silently failing
+- Fix: Raw content fallback when archive extraction returns None
+- Enhanced: download() logs subtitle_id, language, season, episode at entry
+- Enhanced: list_subtitles() logs subtitle_id for each result for debugging
+- Keep: All v1.0.3 through v1.0.7 features preserved (multi-strategy search,
+  Stremio-aligned behavior, web scraping fallback, episode-aware extraction)
+
 v1.0.7 (2026-02-24)
 - CRITICAL FIX: Aligned API calls with official subs.ro Stremio addon behavior
   Deep analysis of github.com/allecsc/stremio-subs-ro source code revealed:

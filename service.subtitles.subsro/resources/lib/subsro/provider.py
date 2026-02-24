@@ -12,7 +12,7 @@ API_SEARCH = "/search/{field}/{value}"
 API_DOWNLOAD = "/subtitle/{id}/download"
 API_QUOTA = "/quota"
 
-USER_AGENT = "Kodi Subs.ro v1.0.7"
+USER_AGENT = "Kodi Subs.ro v1.0.8"
 CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT = 30
 
@@ -167,7 +167,7 @@ class SubsroProvider:
         Returns:
             List of subtitle result dicts, or None if none found.
         """
-        logging("=== v1.0.7 Stremio-Aligned Search ===")
+        logging("=== v1.0.8 Stremio-Aligned Search ===")
         logging("Query: %s" % query)
 
         is_tv_show = bool(query.get("tv_show_title"))
@@ -642,6 +642,10 @@ class SubsroProvider:
         """
         Download subtitle archive from subs.ro.
 
+        v1.0.8: Fixed download headers - removed Content-Type and Accept: application/json
+        which caused the API to return JSON error or empty response instead of binary
+        archive data. The download endpoint returns ZIP/RAR binary, not JSON.
+
         v1.0.7: Confirmed identical URL format to Stremio addon:
         proxy.js builds: https://api.subs.ro/v1.0/subtitle/${subId}/download
         with header: X-Subs-Api-Key: apiKey
@@ -659,12 +663,28 @@ class SubsroProvider:
         """
         from urllib.parse import quote
 
+        if not subtitle_id:
+            raise ProviderError("No subtitle ID provided for download")
+
         url = "{}/subtitle/{}/download".format(API_URL, quote(str(subtitle_id), safe=""))
         logging("Downloading subtitle {}: GET {}".format(subtitle_id, url))
 
+        # v1.0.8: Use specific headers for download -- NOT the session's JSON headers.
+        # The download endpoint returns binary archive data (ZIP/RAR), not JSON.
+        # Sending Accept: application/json causes the API to return JSON error
+        # or empty response instead of the actual archive.
+        # The Stremio addon only sends X-Subs-Api-Key for downloads.
+        download_headers = {
+            "X-Subs-Api-Key": self.api_key,
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+        }
+
         try:
-            r = self.session.get(url, timeout=REQUEST_TIMEOUT)
+            r = self.session.get(url, timeout=REQUEST_TIMEOUT, headers=download_headers)
             logging("Download response status: {}".format(r.status_code))
+            logging("Download response Content-Type: {}".format(
+                r.headers.get("Content-Type", "unknown")))
             r.raise_for_status()
         except (ConnectionError, Timeout, ReadTimeout) as e:
             raise ServiceUnavailable("Connection error: {}".format(e))
@@ -683,5 +703,18 @@ class SubsroProvider:
         if not content:
             raise ProviderError("Empty response from download endpoint")
 
-        logging("Downloaded {} bytes".format(len(content)))
+        # v1.0.8: Validate that the response is actually binary archive data,
+        # not a JSON error response disguised as 200 OK
+        content_type = r.headers.get("Content-Type", "")
+        if "application/json" in content_type:
+            # Server returned JSON instead of archive -- likely an error
+            try:
+                error_data = r.json()
+                error_msg = error_data.get("error", error_data.get("message", str(error_data)))
+                logging("Download returned JSON error: {}".format(error_msg))
+                raise ProviderError("Download API returned error: {}".format(error_msg))
+            except (ValueError, AttributeError):
+                pass  # Not valid JSON, proceed with content as-is
+
+        logging("Downloaded {} bytes (Content-Type: {})".format(len(content), content_type))
         return content

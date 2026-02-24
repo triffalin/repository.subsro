@@ -99,68 +99,107 @@ class SubtitleDownloader:
             log(__name__, "No subtitle found")
 
     def download(self):
-        valid = 1
         subtitle_id = self.params.get("id", "")
         language = self.params.get("language", "ro")
         # v1.0.5: Pass season/episode to extraction for TV show episode matching
         season = self.params.get("season")
         episode = self.params.get("episode")
 
+        log(__name__, "Download request: id={}, language={}, season={}, episode={}".format(
+            subtitle_id, language, season, episode))
+
         if not self.subsro:
             log(__name__, "No provider - API key not configured")
             return
+
+        if not subtitle_id:
+            log(__name__, "No subtitle ID provided - cannot download")
+            return
+
+        # v1.0.8: Initialize archive_content before try block to prevent
+        # UnboundLocalError if AuthenticationError or DownloadLimitExceeded is raised
+        archive_content = None
 
         try:
             archive_content = self.subsro.download_subtitle(subtitle_id)
             log(__name__, "Downloaded archive: {} bytes".format(len(archive_content)))
         except AuthenticationError as e:
             error(__name__, 32003, e)
-            valid = 0
+            return
         except DownloadLimitExceeded as e:
             log(__name__, "Download limit exceeded: {}".format(e))
             error(__name__, 32004, e)
-            valid = 0
+            return
         except (TooManyRequests, ServiceUnavailable, ProviderError, ValueError) as e:
+            log(__name__, "Download failed: {}".format(e))
             error(__name__, 32001, e)
-            valid = 0
-            archive_content = None
+            return
 
+        if not archive_content:
+            log(__name__, "No archive content received")
+            return
+
+        # v1.0.8: Use os.path for directory operations instead of xbmcvfs.exists()
+        # which requires trailing separator for directories and is unreliable
         try:
             dir_path = xbmcvfs.translatePath("special://temp/subsro")
         except Exception:
             dir_path = xbmc.translatePath("special://temp/subsro")
 
-        if xbmcvfs.exists(dir_path):
-            dirs, files = xbmcvfs.listdir(dir_path)
-            for f in files:
-                xbmcvfs.delete(os.path.join(dir_path, f))
-
-        if not xbmcvfs.exists(dir_path):
-            xbmcvfs.mkdir(dir_path)
-
-        subtitle_path = os.path.join(dir_path, "TempSubtitle.{}.{}".format(language, self.sub_format))
-
-        log(__name__, "Subtitle path: {}".format(subtitle_path))
-
-        if valid == 1 and archive_content:
+        # v1.0.8: Use os.path.isdir() instead of xbmcvfs.exists() for directories
+        # xbmcvfs.exists() requires trailing path separator for directories and
+        # returns False without it, causing cleanup to be skipped
+        if os.path.isdir(dir_path):
+            # Clean up old files
             try:
-                # v1.0.5: Pass season/episode for TV show episode-aware extraction
-                extracted_path = extract_subtitle(
-                    archive_content, dir_path,
-                    season=season, episode=episode
-                )
-                if extracted_path:
-                    subtitle_path = extracted_path
-                    log(__name__, "Subtitle extracted: {}".format(subtitle_path))
-                else:
-                    log(__name__, "Failed to extract subtitle from archive")
-                    valid = 0
+                for f in os.listdir(dir_path):
+                    fpath = os.path.join(dir_path, f)
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
             except Exception as e:
-                log(__name__, "Archive extraction failed: {}".format(e))
-                valid = 0
+                log(__name__, "Cleanup failed: {}".format(e))
 
-        list_item = xbmcgui.ListItem(label=subtitle_path)
-        xbmcplugin.addDirectoryItem(handle=self.handle, url=subtitle_path, listitem=list_item, isFolder=False)
+        if not os.path.isdir(dir_path):
+            os.makedirs(dir_path)
+
+        log(__name__, "Extraction dir: {}".format(dir_path))
+
+        try:
+            # v1.0.5: Pass season/episode for TV show episode-aware extraction
+            extracted_path = extract_subtitle(
+                archive_content, dir_path,
+                season=season, episode=episode
+            )
+            if extracted_path:
+                log(__name__, "Subtitle extracted successfully: {}".format(extracted_path))
+                list_item = xbmcgui.ListItem(label=extracted_path)
+                xbmcplugin.addDirectoryItem(
+                    handle=self.handle, url=extracted_path,
+                    listitem=list_item, isFolder=False
+                )
+            else:
+                # v1.0.8: If extraction returns None, try saving raw content as SRT
+                # (some subtitles on subs.ro are plain SRT, not archived)
+                log(__name__, "Extraction returned None - archive may be empty or corrupt")
+                fallback_path = os.path.join(
+                    dir_path, "TempSubtitle.{}.{}".format(language, self.sub_format)
+                )
+                try:
+                    with open(fallback_path, "wb") as f:
+                        f.write(archive_content)
+                    log(__name__, "Saved raw content as fallback: {}".format(fallback_path))
+                    list_item = xbmcgui.ListItem(label=fallback_path)
+                    xbmcplugin.addDirectoryItem(
+                        handle=self.handle, url=fallback_path,
+                        listitem=list_item, isFolder=False
+                    )
+                except Exception as e:
+                    log(__name__, "Fallback save failed: {}".format(e))
+        except Exception as e:
+            log(__name__, "Archive extraction failed: {}".format(e))
+            # v1.0.8: Do NOT call addDirectoryItem with non-existent path
+            # when extraction fails -- this causes Kodi "Attempt failed" error.
+            # Instead, just return and let endOfDirectory signal no subtitle.
 
     def list_subtitles(self):
         """Display subtitle results as Kodi ListItems."""
@@ -216,7 +255,8 @@ class SubtitleDownloader:
                 if season and episode:
                     url += "&season={}&episode={}".format(season, episode)
 
-                log(__name__, "Adding: {} - {}".format(language_name, clean_name))
+                log(__name__, "Adding: {} - {} (id={})".format(
+                    language_name, clean_name, subtitle_id))
                 xbmcplugin.addDirectoryItem(
                     handle=self.handle, url=url, listitem=list_item, isFolder=False
                 )
