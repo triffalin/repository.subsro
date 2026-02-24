@@ -12,7 +12,7 @@ API_SEARCH = "/search/{field}/{value}"
 API_DOWNLOAD = "/subtitle/{id}/download"
 API_QUOTA = "/quota"
 
-USER_AGENT = "Kodi Subs.ro v1.0.6"
+USER_AGENT = "Kodi Subs.ro v1.0.7"
 CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT = 30
 
@@ -92,6 +92,11 @@ def _ensure_tt_prefix(imdb_id):
     The subs.ro API requires IMDB IDs in the format 'tt1234567'.
     Kodi/data_collector strips the 'tt' prefix and stores just the numeric part,
     so we need to add it back before sending to the API.
+
+    v1.0.7: Confirmed same format as Stremio addon - just 'tt' + digits.
+    The Stremio parseStremioId() passes imdbId directly from Stremio's ID
+    which is already in 'tt1234567' format. We pad to minimum 7 digits
+    for standard format but never truncate longer IDs (8+ digits valid).
     """
     if not imdb_id:
         return None
@@ -133,23 +138,28 @@ class SubsroProvider:
         """
         Search for subtitles using multi-strategy cascading search.
 
-        v1.0.6: Research-based improvements inspired by VLC/BSPlayer/a4kSubtitles.
-        Instead of a single search with fallbacks, we try up to 10 strategies
-        in priority order and collect all results, then rank and deduplicate.
+        v1.0.7: Aligned with official subs.ro Stremio addon behavior.
 
-        Strategies for TV shows:
-          1. Parent show IMDB ID (with language filter)
-          2. Episode-specific IMDB ID (with language filter)
-          3. Parent show TMDB ID (with language filter)
-          4. Episode-specific TMDB ID (with language filter)
-          5. Title + S01E05 pattern (with language filter)
-          6. Plain title search (with language filter)
-          7. Episode name/title search (with language filter)
-          8. Original title search (with language filter)
-          9. Release name search (with language filter)
-          10. No-language fallback: repeat best ID strategy without language filter
+        KEY INSIGHT from Stremio addon source code analysis:
+        =====================================================
+        The Stremio addon (github.com/allecsc/stremio-subs-ro) works like this:
+        1. subsro.js: searchByImdb(imdbId) calls /search/imdbid/{imdbId}
+           - NO language parameter sent to API
+           - Reads response.items array
+        2. addon.js: Filters results by language LOCALLY after API response
+           filteredResults = results.filter(sub => config.languages.includes(sub.language))
+        3. addon.js: For each result, downloads archive and lists SRT files inside
+           srtFiles = await getArchiveSrtList(apiKey, sub.id)
+        4. addon.js: Filters SRT files by episode using matchesEpisode(srtPath, season, episode)
+           - Episode matching is done on SRT FILENAMES, not on API result titles
 
-        For movies: IMDB ID -> TMDB ID -> title -> original title -> release name
+        What this means for our Kodi addon:
+        - v1.0.6 was searching with ?language=ro which is TOO RESTRICTIVE
+        - The API may return fewer results with language filter than without
+        - v1.0.7: Search WITHOUT language filter first (like Stremio), filter locally
+        - Keep title/TMDB/release fallbacks for when IMDB is unavailable
+        - TV show episode filtering still done on result titles (we can't download
+          every archive like Stremio), but made more lenient
 
         Args:
             query: Dict containing media_data + file_data + language_data.
@@ -157,14 +167,15 @@ class SubsroProvider:
         Returns:
             List of subtitle result dicts, or None if none found.
         """
-        logging("=== v1.0.6 Multi-Strategy Search ===")
+        logging("=== v1.0.7 Stremio-Aligned Search ===")
         logging("Query: %s" % query)
 
         is_tv_show = bool(query.get("tv_show_title"))
         season = query.get("season_number", "")
         episode = query.get("episode_number", "")
 
-        # Convert requested ISO languages to subs.ro codes
+        # Convert requested ISO languages to subs.ro codes (for LOCAL filtering only)
+        # v1.0.7: Language codes are NOT sent to API anymore (matches Stremio behavior)
         languages_str = query.get("languages", "")
         subsro_languages = []
         if languages_str:
@@ -174,7 +185,7 @@ class SubsroProvider:
                     subsro_lang = iso_to_subsro(lang)
                     if subsro_lang and subsro_lang not in subsro_languages:
                         subsro_languages.append(subsro_lang)
-        logging("Requested subs.ro languages: {}".format(subsro_languages))
+        logging("Requested subs.ro languages (local filter only): {}".format(subsro_languages))
 
         # Gather all available search parameters
         parent_imdb = _ensure_tt_prefix(query.get("parent_imdb_id"))
@@ -191,10 +202,11 @@ class SubsroProvider:
             episode_imdb = None
 
         # Build ordered list of search strategies
+        # v1.0.7: NO language parameter sent to API (matches Stremio behavior)
         strategies = []
 
         if is_tv_show:
-            # Strategy 1: Parent show IMDB ID
+            # Strategy 1: Parent show IMDB ID (THIS IS WHAT STREMIO DOES)
             if parent_imdb:
                 strategies.append(("imdbid", parent_imdb, "parent_imdb"))
 
@@ -269,6 +281,7 @@ class SubsroProvider:
         logging("Built {} search strategies".format(len(strategies)))
 
         # Execute strategies in order -- stop once we get results
+        # v1.0.7: Search WITHOUT language filter (like Stremio addon)
         all_results = []
         successful_strategy = None
 
@@ -279,7 +292,9 @@ class SubsroProvider:
             logging("--- Strategy '{}': {field}={value} ---".format(
                 strategy_name, field=field, value=value))
 
-            results = self._fetch_with_languages(field, value, subsro_languages)
+            # v1.0.7: NO language parameter - search gets ALL results
+            # Language filtering happens locally after receiving results
+            results = self._search_api(field, value)
 
             if results:
                 logging("Strategy '{}' returned {} results".format(
@@ -290,28 +305,42 @@ class SubsroProvider:
             else:
                 logging("Strategy '{}' returned 0 results".format(strategy_name))
 
-        # Strategy 10: No-language fallback
-        # If all language-specific strategies returned nothing, retry the best
-        # ID-based strategy without any language filter to find ALL available subtitles
+        # Strategy 10: Language-specific search as last API resort
+        # v1.0.7: Only try language-specific if no-language search also failed
+        # (reverse of v1.0.6 - now language filter is the fallback, not primary)
         if not all_results and subsro_languages:
-            logging("=== No-language fallback: retrying all strategies without language filter ===")
+            logging("=== Language-specific fallback (Strategy 10) ===")
             for field, value, strategy_name in strategies:
                 if not value:
                     continue
-
-                logging("--- No-lang fallback '{}': {field}={value} ---".format(
-                    strategy_name, field=field, value=value))
-
-                results = self._search_api(field, value)
-                if results:
-                    logging("No-lang fallback '{}' returned {} results".format(
-                        strategy_name, len(results)))
-                    all_results = results
-                    successful_strategy = strategy_name + "_nolang"
+                for lang in subsro_languages:
+                    logging("--- Lang fallback '{}' lang={}: {field}={value} ---".format(
+                        strategy_name, lang, field=field, value=value))
+                    results = self._search_api(field, value, language=lang)
+                    if results:
+                        logging("Lang fallback '{}' lang={} returned {} results".format(
+                            strategy_name, lang, len(results)))
+                        all_results.extend(results)
+                        successful_strategy = strategy_name + "_lang_" + lang
+                if all_results:
                     break
 
+        # Strategy 11: Web scraping fallback (like POV player)
         if not all_results:
-            logging("No subtitles found across all {} strategies".format(len(strategies)))
+            logging("=== Web scraping fallback (Strategy 11) ===")
+            try:
+                from resources.lib.subsro.scraper import SubsroScraper
+                scraper = SubsroScraper(self.session)
+                scraped = scraper.search(query)
+                if scraped:
+                    all_results = scraped
+                    successful_strategy = "web_scraping"
+                    logging("Web scraping found {} results".format(len(scraped)))
+            except Exception as e:
+                logging("Scraping fallback failed: {}".format(e))
+
+        if not all_results:
+            logging("No subtitles found across all strategies + scraping")
             return None
 
         logging("Results from strategy '{}': {} total".format(
@@ -320,6 +349,21 @@ class SubsroProvider:
         # Deduplicate results by subtitle ID
         all_results = self._deduplicate(all_results)
         logging("After deduplication: {} results".format(len(all_results)))
+
+        # v1.0.7: Filter by requested languages LOCALLY (like Stremio addon)
+        # Only filter if user has language preferences set
+        if subsro_languages:
+            lang_filtered = [r for r in all_results
+                             if r.get("language", "") in subsro_languages]
+            if lang_filtered:
+                logging("After local language filter: {} results (from {})".format(
+                    len(lang_filtered), len(all_results)))
+                all_results = lang_filtered
+            else:
+                # No results match requested languages - keep all
+                # (better to show foreign-language subs than nothing)
+                logging("Local language filter matched 0 - keeping all {} results".format(
+                    len(all_results)))
 
         # Filter by season/episode for TV shows
         if is_tv_show and season and episode:
@@ -334,27 +378,6 @@ class SubsroProvider:
         logging("Final ranked results: {}".format(len(all_results)))
 
         return all_results if all_results else None
-
-    def _fetch_with_languages(self, field, value, subsro_languages):
-        """
-        Search API with language-specific queries, collecting results from all languages.
-        Falls back to no language filter if language-specific searches return nothing.
-        """
-        all_results = []
-
-        if subsro_languages:
-            for lang in subsro_languages:
-                results = self._search_api(field, value, language=lang)
-                if results:
-                    all_results.extend(results)
-
-        if not all_results:
-            # Try without language filter as final fallback within this strategy
-            results = self._search_api(field, value)
-            if results:
-                all_results.extend(results)
-
-        return all_results
 
     def _search_api(self, field, value, language=None):
         """Make a search API call to subs.ro."""
@@ -400,8 +423,8 @@ class SubsroProvider:
         except ValueError:
             raise ProviderError("Invalid JSON response from subs.ro")
 
-        # subs.ro API returns subtitle list in the "items" field (not "results")
-        # Also handle "results" as fallback for forward-compatibility
+        # subs.ro API returns subtitle list in the "items" field
+        # Confirmed: Stremio addon reads data.items in subsro.js
         if isinstance(result, dict):
             results = result.get("items") or result.get("results") or []
         elif isinstance(result, list):
@@ -415,8 +438,9 @@ class SubsroProvider:
         if results and isinstance(results[0], dict):
             logging("First result keys: {}".format(list(results[0].keys())))
             for i, r_item in enumerate(results[:3]):
-                logging("Result[{}]: title='{}' description='{}' type='{}' lang='{}'".format(
+                logging("Result[{}]: id={} title='{}' desc='{}' type='{}' lang='{}'".format(
                     i,
+                    r_item.get("id", ""),
                     r_item.get("title", ""),
                     (r_item.get("description", "") or "")[:120],
                     r_item.get("type", ""),
@@ -476,9 +500,16 @@ class SubsroProvider:
         """
         Filter TV show results by season/episode number.
 
-        v1.0.6: Enhanced with episode title matching.
-        When S01E05 patterns are not found in results, also try matching
-        by the episode's actual name (e.g., "Ozymandias" for Breaking Bad S05E14).
+        v1.0.7: Relaxed filtering to match Stremio approach.
+
+        KEY INSIGHT from Stremio addon:
+        The Stremio addon does NOT filter API results at all for TV shows.
+        It downloads EVERY archive, lists SRT files, and matches episodes
+        by SRT filename using matchesEpisode(). We cannot download every
+        archive (too slow for Kodi), so we keep title/description filtering
+        but with a critical change: if no specific matches, return ALL results.
+        The archive extraction (archive_utils.py) already has episode-aware
+        SRT selection that picks the right file from multi-episode archives.
 
         The subs.ro API does NOT return 'season', 'episode', or 'release' fields.
         Available fields: id, title, year, description, link, downloadLink,
@@ -488,7 +519,9 @@ class SubsroProvider:
         1. Check 'title' and 'description' for S01E05 / 1x05 patterns
         2. Check for episode title/name match in title or description
         3. Check for season-only match (e.g., "Season 1" or "S01")
-        4. If no matches at any level, return ALL results (better than nothing)
+        4. If no matches at any level, return ALL results
+           v1.0.7: This is the KEY change - always return results even if
+           no season/episode pattern found. Let archive extraction handle it.
         """
         import re
         try:
@@ -540,7 +573,6 @@ class SubsroProvider:
         exact_matches = []
         episode_name_matches = []
         season_matches = []
-        no_season_info = []
 
         for result in results:
             # Combine all text fields that might contain season/episode info
@@ -574,26 +606,12 @@ class SubsroProvider:
                     continue
 
             # 3. Try season-only match
-            found_season = False
             for pattern in season_only_patterns:
                 if re.search(pattern, searchable_text):
                     season_matches.append(result)
-                    found_season = True
                     logging("TV filter: SEASON match for S{:02d} in '{}'".format(
                         season_int, result.get("title", "")[:80]))
                     break
-
-            if found_season:
-                continue
-
-            # 4. No season/episode info detected - could be a full-series pack
-            has_any_season = re.search(
-                r"[Ss]\d+[Ee]\d+|\d+[xX]\d+|[Ss]ezon|[Ss]eason", searchable_text
-            )
-            if not has_any_season:
-                no_season_info.append(result)
-                logging("TV filter: NO season info in '{}' - may be full pack".format(
-                    result.get("title", "")[:80]))
 
         # Return results with cascading priority:
         # 1. Exact episode matches (best)
@@ -611,20 +629,22 @@ class SubsroProvider:
             logging("TV filter: returning {} season matches".format(len(season_matches)))
             return season_matches
 
-        # 4. Untagged results (might be complete packs)
-        if no_season_info:
-            logging("TV filter: returning {} untagged results (possible full packs)".format(
-                len(no_season_info)))
-            return no_season_info
-
-        # 5. ALL results as last resort (better than nothing)
-        logging("TV filter: no matches at any level, returning all {} results".format(
+        # v1.0.7: ALWAYS return all results if no specific matches found
+        # This matches Stremio behavior - it returns ALL subtitles and lets
+        # archive extraction (episode-aware) handle picking the right SRT file.
+        # Previous versions filtered out results without season info, which
+        # caused many valid subtitles (full-season packs) to be discarded.
+        logging("TV filter: no specific matches, returning ALL {} results (Stremio-style)".format(
             len(results)))
         return results
 
     def download_subtitle(self, subtitle_id):
         """
         Download subtitle archive from subs.ro.
+
+        v1.0.7: Confirmed identical URL format to Stremio addon:
+        proxy.js builds: https://api.subs.ro/v1.0/subtitle/${subId}/download
+        with header: X-Subs-Api-Key: apiKey
 
         Args:
             subtitle_id: The subs.ro subtitle ID.

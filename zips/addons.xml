@@ -22,7 +22,7 @@
         </assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.6" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.7" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />
@@ -35,6 +35,23 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.7 (2026-02-24)
+- CRITICAL FIX: Aligned API calls with official subs.ro Stremio addon behavior
+  Deep analysis of github.com/allecsc/stremio-subs-ro source code revealed:
+  * Stremio searches WITHOUT language filter, then filters results locally
+  * Our v1.0.6 was sending ?language=ro which returns FEWER results
+  * Now: search without language parameter, filter locally (like Stremio)
+- CRITICAL FIX: TV show filtering now returns ALL results when no S01E05 match
+  Stremio returns all subtitles and lets archive extraction pick the right SRT.
+  Previous versions filtered out valid full-season packs.
+- New: Strategy 11 - Web scraping fallback (like POV player)
+  When API returns no results, scrapes subs.ro website directly
+  Finds subtitles not yet indexed in the API
+- New: Video hash module for future OpenSubtitles integration
+- Fix: Language-specific API search is now fallback, not primary strategy
+- Fix: Removed _fetch_with_languages() per-language API calls (unnecessary overhead)
+- Keep: All v1.0.3 through v1.0.6 fixes preserved
+
 v1.0.6 (2026-02-24)
 - New: Multi-strategy cascading search engine (up to 10 strategies per search)
   Research-based improvements inspired by VLC, BSPlayer, and a4kSubtitles search methods
