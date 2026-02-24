@@ -267,6 +267,8 @@ def get_media_data():
         "episode_number": str(xbmc.getInfoLabel("VideoPlayer.Episode")),
         "tv_show_title": normalize_string(xbmc.getInfoLabel("VideoPlayer.TVshowtitle")),
         "original_title": normalize_string(xbmc.getInfoLabel("VideoPlayer.OriginalTitle")),
+        # v1.0.6: Collect episode title for episode name-based search
+        "episode_title": normalize_string(xbmc.getInfoLabel("VideoPlayer.EpisodeName")),
         "parent_tmdb_id": None,
         "parent_imdb_id": None,
         "imdb_id": None,
@@ -275,6 +277,14 @@ def get_media_data():
         "episode_imdb_id": None
     }
     log(__name__, "Initial media data from InfoLabels: {}".format(item))
+
+    # v1.0.6: Also try VideoPlayer.Title as fallback for episode title
+    if not item.get("episode_title"):
+        video_title = normalize_string(xbmc.getInfoLabel("VideoPlayer.Title"))
+        if video_title and video_title != item.get("tv_show_title"):
+            # VideoPlayer.Title for TV shows often contains the episode title
+            item["episode_title"] = video_title
+            log(__name__, "Episode title from VideoPlayer.Title: {}".format(video_title))
 
     if not any([item["tv_show_title"], item["original_title"], item["year"],
                 item["season_number"], item["episode_number"]]):
@@ -322,7 +332,6 @@ def get_media_data():
             log(__name__, "Failed to read true parent IDs from InfoLabels: {}".format(e))
 
         # v1.0.5: Always try to collect episode-specific IMDB ID for fallback
-        # (even when parent IDs are already found)
         try:
             possible_episode_imdb = (xbmc.getInfoLabel("VideoPlayer.UniqueID(imdb)")
                                      or xbmc.getInfoLabel("VideoPlayer.IMDBNumber")
@@ -331,7 +340,6 @@ def get_media_data():
             if imdb_digits and 6 <= len(imdb_digits) <= 8:
                 item["episode_imdb_id"] = int(imdb_digits)
                 log(__name__, "Episode-specific IMDb ID: {}".format(item["episode_imdb_id"]))
-                # Also set imdb_id if no parent IDs found (backward compat)
                 if not item.get("parent_imdb_id") and not item.get("parent_tmdb_id"):
                     item["imdb_id"] = int(imdb_digits)
             possible_episode_tmdb = xbmc.getInfoLabel("VideoPlayer.UniqueID(tmdb)")
@@ -443,6 +451,11 @@ def get_media_data():
     if ep_imdb in (0, "0", "", None):
         item["episode_imdb_id"] = None
 
+    # v1.0.6: Clean episode_title
+    ep_title = item.get("episode_title")
+    if not ep_title or ep_title.strip() == "":
+        item["episode_title"] = None
+
     if item.get("parent_tmdb_id") and item.get("parent_imdb_id"):
         log(__name__, "Both parent IDs found, preferring IMDB ID: {}".format(item["parent_imdb_id"]))
         item["parent_tmdb_id"] = None
@@ -452,33 +465,33 @@ def get_media_data():
         item["tmdb_id"] = None
 
     # ---------- Final ID Strategy Selection (TV Episodes Only) ----------
-    # v1.0.5: Keep episode_imdb_id as fallback even when parent_imdb_id is primary
+    # v1.0.6: Keep ALL IDs available for multi-strategy search in provider.py
+    # Previous versions cleared non-primary IDs here; now we keep them all
+    # so the provider can use them as fallback strategies.
     if item.get("tv_show_title"):
         if item.get("parent_imdb_id"):
-            # Primary: search by parent show IMDB ID
-            item["parent_tmdb_id"] = None
-            item["imdb_id"] = None
-            item["tmdb_id"] = None
-            # episode_imdb_id is PRESERVED for fallback search in provider.py
-            log(__name__, "Final Strategy: parent_imdb_id={} + season/episode (episode_imdb_id={} kept as fallback)".format(
-                item["parent_imdb_id"], item.get("episode_imdb_id")))
+            # Primary strategy is parent_imdb_id, but keep others as fallbacks
+            log(__name__, "Final Strategy: parent_imdb_id={} (fallbacks: episode_imdb={}, parent_tmdb={}, tmdb={})".format(
+                item["parent_imdb_id"],
+                item.get("episode_imdb_id"),
+                item.get("parent_tmdb_id"),
+                item.get("tmdb_id")
+            ))
         elif item.get("parent_tmdb_id"):
-            item["parent_imdb_id"] = None
-            item["imdb_id"] = None
-            item["tmdb_id"] = None
-            # episode_imdb_id preserved for fallback
-            log(__name__, "Final Strategy: parent_tmdb_id={} + season/episode (episode_imdb_id={} kept as fallback)".format(
-                item["parent_tmdb_id"], item.get("episode_imdb_id")))
+            log(__name__, "Final Strategy: parent_tmdb_id={} (fallbacks: episode_imdb={}, imdb={}, tmdb={})".format(
+                item["parent_tmdb_id"],
+                item.get("episode_imdb_id"),
+                item.get("imdb_id"),
+                item.get("tmdb_id")
+            ))
         elif item.get("imdb_id"):
-            item["parent_imdb_id"] = None
-            item["parent_tmdb_id"] = None
-            item["tmdb_id"] = None
-            log(__name__, "Final Strategy: episode imdb_id={}".format(item["imdb_id"]))
+            log(__name__, "Final Strategy: episode imdb_id={} (fallbacks: tmdb={})".format(
+                item["imdb_id"], item.get("tmdb_id")))
         elif item.get("tmdb_id"):
-            item["parent_imdb_id"] = None
-            item["parent_tmdb_id"] = None
-            item["imdb_id"] = None
-            log(__name__, "Final Strategy: episode tmdb_id={}".format(item["tmdb_id"]))
+            log(__name__, "Final Strategy: episode tmdb_id={} (fallback: title only)".format(
+                item["tmdb_id"]))
+        else:
+            log(__name__, "Final Strategy: title-only search for '{}'".format(item.get("query")))
 
     if not item.get("query"):
         fallback_title = normalize_string(xbmc.getInfoLabel("VideoPlayer.Title"))
@@ -501,11 +514,12 @@ def get_media_data():
     if "tvshowid" in item:
         del item["tvshowid"]
 
-    log(__name__, "Media data result: {} - IMDb:{} TMDb:{} EpIMDb:{}".format(
+    log(__name__, "Media data result: {} - IMDb:{} TMDb:{} EpIMDb:{} EpTitle:{}".format(
         item.get("query"),
         item.get("imdb_id") or item.get("parent_imdb_id"),
         item.get("tmdb_id") or item.get("parent_tmdb_id"),
-        item.get("episode_imdb_id")
+        item.get("episode_imdb_id"),
+        item.get("episode_title")
     ))
     return item
 

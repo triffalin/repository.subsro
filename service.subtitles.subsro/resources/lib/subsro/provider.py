@@ -12,7 +12,7 @@ API_SEARCH = "/search/{field}/{value}"
 API_DOWNLOAD = "/subtitle/{id}/download"
 API_QUOTA = "/quota"
 
-USER_AGENT = "Kodi Subs.ro v1.0.5"
+USER_AGENT = "Kodi Subs.ro v1.0.6"
 CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT = 30
 
@@ -62,13 +62,27 @@ SUBSRO_TO_FLAG = {
     "alt": "un",
 }
 
+# Language display priority for ranking (lower = better)
+LANGUAGE_PRIORITY = {
+    "ro": 0,    # Romanian always first
+    "en": 1,    # English second
+    "ita": 5,
+    "fra": 5,
+    "ger": 5,
+    "ung": 5,
+    "gre": 5,
+    "por": 5,
+    "spa": 5,
+    "alt": 10,
+}
+
 
 def iso_to_subsro(iso_code):
     """Convert ISO 639-1 code to subs.ro language code."""
     if not iso_code:
         return None
     iso_lower = iso_code.lower().strip()
-    return ISO_TO_SUBSRO.get(iso_lower)  # None if unsupported — filtered out by caller
+    return ISO_TO_SUBSRO.get(iso_lower)  # None if unsupported -- filtered out by caller
 
 
 def _ensure_tt_prefix(imdb_id):
@@ -117,66 +131,38 @@ class SubsroProvider:
 
     def search_subtitles(self, query):
         """
-        Search for subtitles using the subs.ro API.
+        Search for subtitles using multi-strategy cascading search.
+
+        v1.0.6: Research-based improvements inspired by VLC/BSPlayer/a4kSubtitles.
+        Instead of a single search with fallbacks, we try up to 10 strategies
+        in priority order and collect all results, then rank and deduplicate.
+
+        Strategies for TV shows:
+          1. Parent show IMDB ID (with language filter)
+          2. Episode-specific IMDB ID (with language filter)
+          3. Parent show TMDB ID (with language filter)
+          4. Episode-specific TMDB ID (with language filter)
+          5. Title + S01E05 pattern (with language filter)
+          6. Plain title search (with language filter)
+          7. Episode name/title search (with language filter)
+          8. Original title search (with language filter)
+          9. Release name search (with language filter)
+          10. No-language fallback: repeat best ID strategy without language filter
+
+        For movies: IMDB ID -> TMDB ID -> title -> original title -> release name
 
         Args:
             query: Dict containing media_data + file_data + language_data.
-                   Keys: query, year, season_number, episode_number,
-                         tv_show_title, imdb_id, parent_imdb_id,
-                         episode_imdb_id, tmdb_id, parent_tmdb_id,
-                         languages (comma-separated ISO codes)
 
         Returns:
             List of subtitle result dicts, or None if none found.
         """
-        logging("Searching subtitles with query: %s" % query)
+        logging("=== v1.0.6 Multi-Strategy Search ===")
+        logging("Query: %s" % query)
 
         is_tv_show = bool(query.get("tv_show_title"))
         season = query.get("season_number", "")
         episode = query.get("episode_number", "")
-
-        # Determine primary search field and value
-        search_field = None
-        search_value = None
-
-        if is_tv_show:
-            # TV SHOW SEARCH STRATEGY:
-            # 1. Primary: parent (show) IMDB ID - returns all subtitles for the show
-            # 2. Fallback: episode-specific IMDB ID
-            # 3. Fallback: parent TMDB ID
-            # 4. Fallback: title search
-            if query.get("parent_imdb_id"):
-                search_field = "imdbid"
-                search_value = _ensure_tt_prefix(query["parent_imdb_id"])
-            elif query.get("episode_imdb_id"):
-                search_field = "imdbid"
-                search_value = _ensure_tt_prefix(query["episode_imdb_id"])
-            elif query.get("imdb_id"):
-                search_field = "imdbid"
-                search_value = _ensure_tt_prefix(query["imdb_id"])
-            elif query.get("parent_tmdb_id"):
-                search_field = "tmdbid"
-                search_value = str(query["parent_tmdb_id"])
-            elif query.get("query"):
-                search_field = "title"
-                search_value = str(query["query"])
-        else:
-            # MOVIE SEARCH STRATEGY (unchanged from v1.0.4)
-            if query.get("imdb_id"):
-                search_field = "imdbid"
-                search_value = _ensure_tt_prefix(query["imdb_id"])
-            elif query.get("tmdb_id"):
-                search_field = "tmdbid"
-                search_value = str(query["tmdb_id"])
-            elif query.get("query"):
-                search_field = "title"
-                search_value = str(query["query"])
-
-        if not search_field or not search_value:
-            logging("No valid search parameters found")
-            return None
-
-        logging("Search: {}={} (is_tv_show={})".format(search_field, search_value, is_tv_show))
 
         # Convert requested ISO languages to subs.ro codes
         languages_str = query.get("languages", "")
@@ -190,77 +176,184 @@ class SubsroProvider:
                         subsro_languages.append(subsro_lang)
         logging("Requested subs.ro languages: {}".format(subsro_languages))
 
-        # Fetch results -- search per language for precise results
-        all_results = self._fetch_with_language_fallback(
-            search_field, search_value, subsro_languages
-        )
+        # Gather all available search parameters
+        parent_imdb = _ensure_tt_prefix(query.get("parent_imdb_id"))
+        episode_imdb = _ensure_tt_prefix(query.get("episode_imdb_id") or query.get("imdb_id"))
+        parent_tmdb = str(query.get("parent_tmdb_id")) if query.get("parent_tmdb_id") else None
+        episode_tmdb = str(query.get("tmdb_id")) if query.get("tmdb_id") else None
+        title = str(query.get("query", "")).strip() if query.get("query") else None
+        original_title = str(query.get("original_title", "")).strip() if query.get("original_title") else None
+        episode_title = str(query.get("episode_title", "")).strip() if query.get("episode_title") else None
+        file_basename = str(query.get("basename", "")).strip() if query.get("basename") else None
 
-        # FALLBACK 1: For TV shows, if parent IMDB search returned nothing,
-        # try episode-specific IMDB ID
-        if not all_results and is_tv_show and search_field == "imdbid":
-            episode_imdb = query.get("episode_imdb_id") or query.get("imdb_id")
+        # Avoid duplicate IMDb IDs (sometimes episode_imdb == parent_imdb)
+        if episode_imdb and episode_imdb == parent_imdb:
+            episode_imdb = None
+
+        # Build ordered list of search strategies
+        strategies = []
+
+        if is_tv_show:
+            # Strategy 1: Parent show IMDB ID
+            if parent_imdb:
+                strategies.append(("imdbid", parent_imdb, "parent_imdb"))
+
+            # Strategy 2: Episode-specific IMDB ID
             if episode_imdb:
-                ep_tt = _ensure_tt_prefix(episode_imdb)
-                if ep_tt and ep_tt != search_value:
-                    logging("TV fallback: trying episode IMDB ID: {}".format(ep_tt))
-                    all_results = self._fetch_with_language_fallback(
-                        "imdbid", ep_tt, subsro_languages
-                    )
+                strategies.append(("imdbid", episode_imdb, "episode_imdb"))
 
-        # FALLBACK 2: If IMDB/TMDB search returned nothing, try title search
-        if not all_results and search_field in ("imdbid", "tmdbid") and query.get("query"):
-            title_query = str(query["query"])
-            # For TV shows, append season info to title for better matching
-            if is_tv_show and season and episode:
+            # Strategy 3: Parent show TMDB ID
+            if parent_tmdb:
+                strategies.append(("tmdbid", parent_tmdb, "parent_tmdb"))
+
+            # Strategy 4: Episode-specific TMDB ID
+            if episode_tmdb:
+                strategies.append(("tmdbid", episode_tmdb, "episode_tmdb"))
+
+            # Strategy 5: Title + S01E05 pattern
+            if title and season and episode:
                 try:
                     title_with_se = "{} S{:02d}E{:02d}".format(
-                        title_query, int(season), int(episode)
+                        title, int(season), int(episode)
                     )
+                    strategies.append(("title", title_with_se, "title_with_SE"))
                 except (ValueError, TypeError):
-                    title_with_se = title_query
-                logging("Title fallback with S/E: {}".format(title_with_se))
-                all_results = self._fetch_with_language_fallback(
-                    "title", title_with_se, subsro_languages
-                )
+                    pass
 
-            # Try plain title if S/E title didn't work
-            if not all_results:
-                logging("Title fallback (plain): {}".format(title_query))
-                all_results = self._fetch_with_language_fallback(
-                    "title", title_query, subsro_languages
-                )
+            # Strategy 6: Plain title search
+            if title:
+                strategies.append(("title", title, "plain_title"))
+
+            # Strategy 7: Episode name/title search (e.g., "Ozymandias")
+            if episode_title and episode_title != title:
+                strategies.append(("title", episode_title, "episode_title"))
+                # Also try show + episode name combo
+                if title:
+                    combo = "{} {}".format(title, episode_title)
+                    strategies.append(("title", combo, "title_plus_episode_name"))
+
+            # Strategy 8: Original title (if different from display title)
+            if original_title and original_title != title:
+                strategies.append(("title", original_title, "original_title"))
+                # Also try original title + S01E05
+                if season and episode:
+                    try:
+                        orig_with_se = "{} S{:02d}E{:02d}".format(
+                            original_title, int(season), int(episode)
+                        )
+                        strategies.append(("title", orig_with_se, "original_title_with_SE"))
+                    except (ValueError, TypeError):
+                        pass
+
+            # Strategy 9: Release/filename search
+            if file_basename:
+                strategies.append(("release", file_basename, "release_name"))
+
+        else:
+            # MOVIE search strategies
+            if query.get("imdb_id"):
+                strategies.append(("imdbid", _ensure_tt_prefix(query["imdb_id"]), "movie_imdb"))
+            if query.get("tmdb_id"):
+                strategies.append(("tmdbid", str(query["tmdb_id"]), "movie_tmdb"))
+            if title:
+                strategies.append(("title", title, "movie_title"))
+            if original_title and original_title != title:
+                strategies.append(("title", original_title, "movie_original_title"))
+            if file_basename:
+                strategies.append(("release", file_basename, "movie_release"))
+
+        if not strategies:
+            logging("No valid search strategies could be built")
+            return None
+
+        logging("Built {} search strategies".format(len(strategies)))
+
+        # Execute strategies in order -- stop once we get results
+        all_results = []
+        successful_strategy = None
+
+        for field, value, strategy_name in strategies:
+            if not value:
+                continue
+
+            logging("--- Strategy '{}': {field}={value} ---".format(
+                strategy_name, field=field, value=value))
+
+            results = self._fetch_with_languages(field, value, subsro_languages)
+
+            if results:
+                logging("Strategy '{}' returned {} results".format(
+                    strategy_name, len(results)))
+                all_results = results
+                successful_strategy = strategy_name
+                break
+            else:
+                logging("Strategy '{}' returned 0 results".format(strategy_name))
+
+        # Strategy 10: No-language fallback
+        # If all language-specific strategies returned nothing, retry the best
+        # ID-based strategy without any language filter to find ALL available subtitles
+        if not all_results and subsro_languages:
+            logging("=== No-language fallback: retrying all strategies without language filter ===")
+            for field, value, strategy_name in strategies:
+                if not value:
+                    continue
+
+                logging("--- No-lang fallback '{}': {field}={value} ---".format(
+                    strategy_name, field=field, value=value))
+
+                results = self._search_api(field, value)
+                if results:
+                    logging("No-lang fallback '{}' returned {} results".format(
+                        strategy_name, len(results)))
+                    all_results = results
+                    successful_strategy = strategy_name + "_nolang"
+                    break
 
         if not all_results:
-            logging("No subtitles found")
+            logging("No subtitles found across all {} strategies".format(len(strategies)))
             return None
+
+        logging("Results from strategy '{}': {} total".format(
+            successful_strategy, len(all_results)))
+
+        # Deduplicate results by subtitle ID
+        all_results = self._deduplicate(all_results)
+        logging("After deduplication: {} results".format(len(all_results)))
 
         # Filter by season/episode for TV shows
         if is_tv_show and season and episode:
-            all_results = self._filter_tv_results(all_results, season, episode)
+            all_results = self._filter_tv_results(
+                all_results, season, episode,
+                episode_title=episode_title
+            )
             logging("After TV filtering: {} results".format(len(all_results)))
 
-        logging("Total results: {}".format(len(all_results)))
+        # Rank results: language match > episode match > downloads > date
+        all_results = self._rank_results(all_results, subsro_languages)
+        logging("Final ranked results: {}".format(len(all_results)))
+
         return all_results if all_results else None
 
-    def _fetch_with_language_fallback(self, field, value, subsro_languages):
-        """Search API with language-specific queries, falling back to no language filter."""
+    def _fetch_with_languages(self, field, value, subsro_languages):
+        """
+        Search API with language-specific queries, collecting results from all languages.
+        Falls back to no language filter if language-specific searches return nothing.
+        """
         all_results = []
+
         if subsro_languages:
             for lang in subsro_languages:
                 results = self._search_api(field, value, language=lang)
                 if results:
                     all_results.extend(results)
 
-            # Fallback: if language-specific search returned nothing, try without language filter
-            if not all_results:
-                logging("No results with language filter, retrying without language parameter")
-                results = self._search_api(field, value)
-                if results:
-                    all_results.extend(results)
-        else:
+        if not all_results:
+            # Try without language filter as final fallback within this strategy
             results = self._search_api(field, value)
             if results:
                 all_results.extend(results)
+
         return all_results
 
     def _search_api(self, field, value, language=None):
@@ -293,12 +386,17 @@ class SubsroProvider:
                 raise TooManyRequests()
             elif status_code == 503:
                 raise ServiceUnavailable("Service unavailable: {}".format(e))
+            elif status_code == 404:
+                # Not found is normal for search -- not an error
+                logging("404 - no results for this search")
+                return []
             else:
                 raise ProviderError("HTTP {}: {}".format(status_code, e))
 
         try:
             result = r.json()
-            logging("Search response JSON keys: {}".format(list(result.keys()) if isinstance(result, dict) else type(result).__name__))
+            logging("Search response JSON keys: {}".format(
+                list(result.keys()) if isinstance(result, dict) else type(result).__name__))
         except ValueError:
             raise ProviderError("Invalid JSON response from subs.ro")
 
@@ -307,7 +405,6 @@ class SubsroProvider:
         if isinstance(result, dict):
             results = result.get("items") or result.get("results") or []
         elif isinstance(result, list):
-            # In case the API returns a bare list
             results = result
         else:
             results = []
@@ -317,20 +414,71 @@ class SubsroProvider:
         # Log first result for debugging (helps identify response structure)
         if results and isinstance(results[0], dict):
             logging("First result keys: {}".format(list(results[0].keys())))
-            # Log title and description of first few results for TV debugging
             for i, r_item in enumerate(results[:3]):
-                logging("Result[{}]: title='{}' description='{}' type='{}'".format(
+                logging("Result[{}]: title='{}' description='{}' type='{}' lang='{}'".format(
                     i,
                     r_item.get("title", ""),
                     (r_item.get("description", "") or "")[:120],
-                    r_item.get("type", "")
+                    r_item.get("type", ""),
+                    r_item.get("language", "")
                 ))
 
         return results
 
-    def _filter_tv_results(self, results, season, episode):
+    def _deduplicate(self, results):
+        """Remove duplicate results by subtitle ID."""
+        seen_ids = set()
+        unique = []
+        for r in results:
+            sub_id = r.get("id")
+            if sub_id and sub_id in seen_ids:
+                continue
+            if sub_id:
+                seen_ids.add(sub_id)
+            unique.append(r)
+        return unique
+
+    def _rank_results(self, results, requested_languages):
+        """
+        Rank subtitle results by relevance.
+
+        Priority order:
+        1. Language match (requested languages first, Romanian always preferred)
+        2. Download count (higher = better, more popular = likely better quality)
+        3. Upload date (newer = better)
+        """
+        requested_set = set(requested_languages) if requested_languages else set()
+        # Always prioritize Romanian
+        if not requested_set:
+            requested_set = {"ro", "en"}
+
+        def sort_key(item):
+            lang = item.get("language", "")
+
+            # Language priority: requested > other
+            if lang in requested_set:
+                lang_score = LANGUAGE_PRIORITY.get(lang, 5)
+            else:
+                lang_score = 50  # Non-requested languages ranked last
+
+            # Download count (negate for descending sort)
+            try:
+                downloads = -int(item.get("downloads", 0))
+            except (ValueError, TypeError):
+                downloads = 0
+
+            return (lang_score, downloads)
+
+        results.sort(key=sort_key)
+        return results
+
+    def _filter_tv_results(self, results, season, episode, episode_title=None):
         """
         Filter TV show results by season/episode number.
+
+        v1.0.6: Enhanced with episode title matching.
+        When S01E05 patterns are not found in results, also try matching
+        by the episode's actual name (e.g., "Ozymandias" for Breaking Bad S05E14).
 
         The subs.ro API does NOT return 'season', 'episode', or 'release' fields.
         Available fields: id, title, year, description, link, downloadLink,
@@ -338,10 +486,9 @@ class SubsroProvider:
 
         Strategy:
         1. Check 'title' and 'description' for S01E05 / 1x05 patterns
-        2. Check for season-only match (e.g., "Season 1" or "S01")
-        3. If no matches at any level, return ALL results (better than nothing)
-
-        This ensures the user always sees relevant subtitles.
+        2. Check for episode title/name match in title or description
+        3. Check for season-only match (e.g., "Season 1" or "S01")
+        4. If no matches at any level, return ALL results (better than nothing)
         """
         import re
         try:
@@ -351,8 +498,9 @@ class SubsroProvider:
             logging("TV filter: invalid season/episode, returning all results")
             return results
 
-        logging("TV filter: looking for S{:02d}E{:02d} in {} results".format(
-            season_int, episode_int, len(results)))
+        logging("TV filter: looking for S{:02d}E{:02d} in {} results{}".format(
+            season_int, episode_int, len(results),
+            " (episode_title='{}')".format(episode_title) if episode_title else ""))
 
         # Build regex patterns for exact episode match
         # Matches: S01E05, s01e05, S1E5, 1x05, 01x05
@@ -370,6 +518,11 @@ class SubsroProvider:
             r"[Ss]eason\s*0?{s}\s*[Ee]pisode\s*0?{e}".format(
                 s=season_int, e=episode_int)
         )
+        # Match "E05" or "Ep05" or "Ep.05" standalone (for season-specific archives)
+        exact_episode_patterns.append(
+            r"(?:^|[^0-9a-zA-Z])[Ee](?:p\.?)?\s*0?{e}(?:\b|[^0-9])".format(
+                e=episode_int)
+        )
 
         # Build patterns for season-only match (less precise)
         season_only_patterns = [
@@ -379,7 +532,13 @@ class SubsroProvider:
             r"\b0?{s}[xX]\d".format(s=season_int),          # 1x (any episode)
         ]
 
+        # Prepare episode title for matching (if available)
+        episode_title_lower = episode_title.lower().strip() if episode_title else None
+        # Only use episode title matching if title is long enough to be meaningful
+        use_episode_title = episode_title_lower and len(episode_title_lower) >= 3
+
         exact_matches = []
+        episode_name_matches = []
         season_matches = []
         no_season_info = []
 
@@ -392,7 +551,7 @@ class SubsroProvider:
                     searchable_parts.append(str(val))
             searchable_text = " ".join(searchable_parts)
 
-            # 1. Try exact episode match
+            # 1. Try exact episode match (S01E05 pattern)
             found_exact = False
             for pattern in exact_episode_patterns:
                 if re.search(pattern, searchable_text):
@@ -405,7 +564,16 @@ class SubsroProvider:
             if found_exact:
                 continue
 
-            # 2. Try season-only match
+            # 2. Try episode title/name match (e.g., "Ozymandias" in description)
+            if use_episode_title:
+                searchable_lower = searchable_text.lower()
+                if episode_title_lower in searchable_lower:
+                    episode_name_matches.append(result)
+                    logging("TV filter: EPISODE NAME match '{}' in '{}'".format(
+                        episode_title_lower, result.get("title", "")[:80]))
+                    continue
+
+            # 3. Try season-only match
             found_season = False
             for pattern in season_only_patterns:
                 if re.search(pattern, searchable_text):
@@ -418,8 +586,7 @@ class SubsroProvider:
             if found_season:
                 continue
 
-            # 3. No season/episode info detected - could be a full-series pack
-            # Check if there's any S__E__ pattern at all; if none, it's untagged
+            # 4. No season/episode info detected - could be a full-series pack
             has_any_season = re.search(
                 r"[Ss]\d+[Ee]\d+|\d+[xX]\d+|[Ss]ezon|[Ss]eason", searchable_text
             )
@@ -434,18 +601,23 @@ class SubsroProvider:
             logging("TV filter: returning {} exact episode matches".format(len(exact_matches)))
             return exact_matches
 
-        # 2. Season matches (good - user can pick the right one)
+        # 2. Episode name matches (good - matched by episode title)
+        if episode_name_matches:
+            logging("TV filter: returning {} episode name matches".format(len(episode_name_matches)))
+            return episode_name_matches
+
+        # 3. Season matches (decent - user can pick the right one)
         if season_matches:
             logging("TV filter: returning {} season matches".format(len(season_matches)))
             return season_matches
 
-        # 3. Untagged results (might be complete packs)
+        # 4. Untagged results (might be complete packs)
         if no_season_info:
             logging("TV filter: returning {} untagged results (possible full packs)".format(
                 len(no_season_info)))
             return no_season_info
 
-        # 4. ALL results as last resort (better than nothing)
+        # 5. ALL results as last resort (better than nothing)
         logging("TV filter: no matches at any level, returning all {} results".format(
             len(results)))
         return results

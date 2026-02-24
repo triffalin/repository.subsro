@@ -22,7 +22,7 @@
         </assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.5" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.6" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />
@@ -35,6 +35,22 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.6 (2026-02-24)
+- New: Multi-strategy cascading search engine (up to 10 strategies per search)
+  Research-based improvements inspired by VLC, BSPlayer, and a4kSubtitles search methods
+- New: Search by episode title/name (e.g., "Ozymandias" for Breaking Bad S05E14)
+  Extracts VideoPlayer.EpisodeName from Kodi InfoLabels for title-based search
+- New: Original title search (searches by original title when different from display title)
+- New: Release/filename search as additional fallback strategy
+- New: No-language fallback repeats ALL strategies without language filter
+- New: Episode title matching in _filter_tv_results() for shows without S01E05 numbering
+- New: Result ranking by language priority (Romanian first) and download count
+- New: Result deduplication by subtitle ID across strategies
+- New: 404 responses handled gracefully (no error, just empty results)
+- Fix: All IDs now preserved for multi-strategy search (no longer cleared in data_collector)
+- Fix: data_collector now collects episode_title from VideoPlayer.EpisodeName
+- Keep: All v1.0.5 fixes (tt prefix, items field, archive extraction, etc.)
+
 v1.0.5 (2026-02-24)
 - Fix: TV show/series subtitle search completely rewritten
 - Fix: Search by show IMDB ID (parent) with episode IMDB ID as fallback
