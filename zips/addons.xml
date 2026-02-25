@@ -22,7 +22,7 @@
         </assets>
     </extension>
 </addon>
-<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.10" provider-name="subs.ro">
+<addon id="service.subtitles.subsro" name="Subs.ro" version="1.0.11" provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0" />
 		<import addon="script.module.requests" version="2.25.1+matrix.1" />
@@ -35,6 +35,20 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.11 (2026-02-25)
+- CRITICAL FIX: Download no longer saves HTML login-redirect pages as .srt
+  Previously, when website download returned an HTML page (requires login),
+  the HTML was falsely detected as SRT (due to --&gt; in JS comments) and saved.
+  Kodi then failed with "Unable to create subtitle parser". Fixed by:
+  a) archive_utils: require real SRT timestamp format, reject HTML signatures
+  b) subtitle_downloader: skip download if Content-Type is text/html
+- CRITICAL FIX: TV season filter no longer shows wrong seasons
+  Previously "Sezonul 12" appeared when searching for S01E01 because the
+  fallback returned ALL results when no season match was found. Now explicitly
+  wrong-season results are excluded; only untagged packs and correct seasons remain
+- FIX: archive_utils detects ZIP/RAR magic bytes and logs format for diagnostics
+- Keep: All v1.0.10 fixes preserved
+
 v1.0.10 (2026-02-25)
 - CRITICAL FIX: Scraper results now display clean titles (html.unescape applied)
   Previously showed raw HTML entities like &amp;#x22;Grey&amp;#x27;s Anatomy&amp;#x22;

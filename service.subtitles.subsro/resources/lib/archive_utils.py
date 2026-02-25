@@ -7,6 +7,8 @@ library is available. Falls back to treating raw data as a plain
 subtitle file if it is not a recognized archive format.
 
 v1.0.5: Added season/episode-aware subtitle selection for TV show archives.
+v1.0.11: Strict validation in _try_as_plain_subtitle() to prevent HTML or
+         binary archive data from being saved as .srt files.
 """
 
 import os
@@ -236,10 +238,45 @@ def _extract_from_rar(archive_bytes, dest_dir, season=None, episode=None):
 
 
 def _try_as_plain_subtitle(data, dest_dir):
-    """Treat raw bytes as a plain subtitle file (not inside an archive)."""
-    text_preview = data[:500].decode("utf-8", errors="replace").strip()
-    if "-->" in text_preview or (text_preview and text_preview[0].isdigit()):
-        log(__name__, "Data appears to be a plain SRT file (not archived)")
+    """Treat raw bytes as a plain subtitle file (not inside an archive).
+
+    v1.0.11: Strict validation - rejects binary archives and HTML content.
+    HTML pages (login redirects) contain --> in JS comments and would
+    previously pass the old check, causing garbage .srt files and
+    'Unable to create subtitle parser' errors in Kodi.
+    """
+    # Reject known binary archive magic bytes immediately
+    if data[:4] == b'PK\x03\x04':
+        log(__name__, "Data is a ZIP archive (magic PK) - not a plain subtitle")
+        return None
+    if len(data) >= 6 and data[:6] == b'Rar!\x1a\x07':
+        log(__name__, "Data is a RAR archive - not a plain subtitle")
+        return None
+    if data[:4] == b'7z\xbc\xaf':
+        log(__name__, "Data is a 7z archive - not a plain subtitle")
+        return None
+
+    try:
+        text_preview = data[:1000].decode("utf-8", errors="replace").strip()
+    except Exception:
+        return None
+
+    # v1.0.11: Reject HTML content (login redirect pages)
+    # These contain --> in JS comments like <!-- ... --> and would fool the old check
+    text_lower = text_preview[:200].lower()
+    if text_lower.startswith(("<!doctype", "<html", "<?xml", "<?php")):
+        log(__name__, "Data starts with HTML/XML marker - login redirect, not a subtitle")
+        return None
+    # Count angle brackets -- subtitle files have very few (maybe <i>, <b> tags)
+    angle_count = text_preview[:500].count("<")
+    if angle_count > 8:
+        log(__name__, "Data has {} angle brackets - likely HTML page, not subtitle".format(
+            angle_count))
+        return None
+
+    # Require proper SRT timestamp format: HH:MM:SS,mmm --> HH:MM:SS,mmm
+    if re.search(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}', text_preview):
+        log(__name__, "Data appears to be a plain subtitle file (has SRT timestamps)")
         dest_path = os.path.join(dest_dir, "subtitle.srt")
         return _write_subtitle_file(data, dest_path)
 
@@ -278,6 +315,20 @@ def extract_subtitle(archive_bytes, dest_dir, season=None, episode=None):
     log(__name__, "Attempting to extract subtitle from {size} bytes to {dir} (S={s} E={e})".format(
         size=len(archive_bytes), dir=dest_dir, s=season, e=episode
     ))
+
+    # v1.0.11: Log the archive format based on magic bytes for diagnostics
+    if archive_bytes[:4] == b'PK\x03\x04':
+        log(__name__, "Archive format: ZIP (magic PK)")
+    elif len(archive_bytes) >= 6 and archive_bytes[:6] == b'Rar!\x1a\x07':
+        log(__name__, "Archive format: RAR - rarfile support: {}".format(HAS_RARFILE))
+        if not HAS_RARFILE:
+            log(__name__, "WARNING: RAR archive cannot be extracted (rarfile library not installed)")
+    elif archive_bytes[:2] in (b'\xd0\xcf', b'ID3'):
+        log(__name__, "Archive format: unknown binary ({})".format(archive_bytes[:4]))
+    else:
+        # Try to decode first 50 bytes as text to see what it is
+        preview = archive_bytes[:50].decode("utf-8", errors="replace")
+        log(__name__, "Archive first bytes (text): {}".format(repr(preview[:50])))
 
     result = _extract_from_zip(archive_bytes, dest_dir, season=season, episode=episode)
     if result:

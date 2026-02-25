@@ -140,6 +140,7 @@ class SubtitleDownloader:
                 # Don't return yet -- try downloadLink fallback below
 
         # v1.0.10: Fallback to direct website download URL (from scraper results)
+        # v1.0.11: Added Content-Type check to reject HTML responses (login redirects)
         if not archive_content and download_link:
             log(__name__, "Trying direct download from: {}".format(download_link))
             try:
@@ -151,14 +152,22 @@ class SubtitleDownloader:
                     "Referer": "https://subs.ro/",
                 }
                 r = dl_session.get(download_link, timeout=20, allow_redirects=True)
+                ct = r.headers.get("Content-Type", "unknown")
                 log(__name__, "Direct download status: {} Content-Type: {}".format(
-                    r.status_code, r.headers.get("Content-Type", "unknown")))
+                    r.status_code, ct))
                 r.raise_for_status()
-                if r.content and len(r.content) > 0:
+                # v1.0.11: Reject HTML responses - these are login redirect pages,
+                # not subtitle archives. Saving HTML as .srt causes
+                # "Unable to create subtitle parser" in Kodi.
+                if "text/html" in ct.lower():
+                    log(__name__, "Direct download returned HTML page - website requires login. "
+                                  "Cannot download scraper results without authentication.")
+                elif r.content and len(r.content) > 100:
                     archive_content = r.content
                     log(__name__, "Direct download OK: {} bytes".format(len(archive_content)))
                 else:
-                    log(__name__, "Direct download returned empty content")
+                    log(__name__, "Direct download returned empty or tiny content ({} bytes)".format(
+                        len(r.content) if r.content else 0))
             except Exception as e:
                 log(__name__, "Direct download failed: {}".format(e))
 

@@ -657,14 +657,72 @@ class SubsroProvider:
             logging("TV filter: returning {} season matches".format(len(season_matches)))
             return season_matches
 
-        # v1.0.7: ALWAYS return all results if no specific matches found
-        # This matches Stremio behavior - it returns ALL subtitles and lets
-        # archive extraction (episode-aware) handle picking the right SRT file.
-        # Previous versions filtered out results without season info, which
-        # caused many valid subtitles (full-season packs) to be discarded.
-        logging("TV filter: no specific matches, returning ALL {} results (Stremio-style)".format(
-            len(results)))
-        return results
+        # v1.0.11: Negative season filter -- exclude results that explicitly
+        # mention a DIFFERENT season. Keep results with no season info
+        # (full-series packs or unnumbered uploads).
+        # Replaces the v1.0.7 "return ALL" fallback which caused Season 12
+        # to appear when searching for Season 1 of a long-running show.
+        logging("TV filter: no S/E matches found - applying negative season filter")
+        filtered_fallback = []
+        excluded_count = 0
+        for result in results:
+            # Check title and description only (not URLs which lack season context)
+            text_parts = []
+            for field in ("title", "description"):
+                val = result.get(field, "")
+                if val:
+                    text_parts.append(str(val))
+            result_text = " ".join(text_parts)
+
+            mentioned_seasons = set()
+            # "Sezonul 12" / "Sezon 12"
+            for m in re.finditer(r'[Ss]ezon(?:ul)?\s*(\d+)', result_text, re.IGNORECASE):
+                try:
+                    mentioned_seasons.add(int(m.group(1)))
+                except (ValueError, TypeError):
+                    pass
+            # "Season 12"
+            for m in re.finditer(r'[Ss]eason\s*(\d+)', result_text, re.IGNORECASE):
+                try:
+                    mentioned_seasons.add(int(m.group(1)))
+                except (ValueError, TypeError):
+                    pass
+            # "S12E" or "S12 " pattern
+            for m in re.finditer(r'[Ss](\d+)[Ee\s]', result_text):
+                try:
+                    mentioned_seasons.add(int(m.group(1)))
+                except (ValueError, TypeError):
+                    pass
+
+            # Multi-season range "Sezoanele 1-22" -- if our season is in range, keep it
+            multi = multi_season_pattern.search(result_text)
+            if multi:
+                try:
+                    r_start = int(multi.group(1))
+                    r_end = int(multi.group(2))
+                    if r_start <= season_int <= r_end:
+                        mentioned_seasons.add(season_int)
+                except (ValueError, TypeError):
+                    pass
+
+            if mentioned_seasons and season_int not in mentioned_seasons:
+                # Explicitly wrong season -- exclude
+                excluded_count += 1
+                logging("TV filter: excluding result with season(s) {}: '{}'".format(
+                    mentioned_seasons, result.get("title", "")[:60]))
+            else:
+                filtered_fallback.append(result)
+
+        if filtered_fallback:
+            logging("TV filter: kept {}/{} results after negative filter "
+                    "(excluded {} wrong-season)".format(
+                len(filtered_fallback), len(results), excluded_count))
+            return filtered_fallback
+        else:
+            # Every result had explicitly wrong season -- last resort, return all
+            logging("TV filter: all results had wrong season, returning ALL {} (last resort)".format(
+                len(results)))
+            return results
 
     def download_subtitle(self, subtitle_id):
         """
