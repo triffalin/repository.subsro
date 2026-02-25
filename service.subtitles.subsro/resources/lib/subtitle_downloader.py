@@ -1,3 +1,4 @@
+import html
 import os
 import shutil
 import sys
@@ -104,39 +105,65 @@ class SubtitleDownloader:
         # v1.0.5: Pass season/episode to extraction for TV show episode matching
         season = self.params.get("season")
         episode = self.params.get("episode")
+        # v1.0.10: Get downloadLink for scraper fallback download
+        download_link = self.params.get("downloadLink", "")
 
-        log(__name__, "Download request: id={}, language={}, season={}, episode={}".format(
-            subtitle_id, language, season, episode))
+        log(__name__, "Download request: id={}, language={}, season={}, episode={}, downloadLink={}".format(
+            subtitle_id, language, season, episode, download_link[:80] if download_link else ""))
 
         if not self.subsro:
             log(__name__, "No provider - API key not configured")
             return
 
-        if not subtitle_id:
-            log(__name__, "No subtitle ID provided - cannot download")
+        if not subtitle_id and not download_link:
+            log(__name__, "No subtitle ID or download link provided - cannot download")
             return
 
         # v1.0.8: Initialize archive_content before try block to prevent
         # UnboundLocalError if AuthenticationError or DownloadLimitExceeded is raised
         archive_content = None
 
-        try:
-            archive_content = self.subsro.download_subtitle(subtitle_id)
-            log(__name__, "Downloaded archive: {} bytes".format(len(archive_content)))
-        except AuthenticationError as e:
-            error(__name__, 32003, e)
-            return
-        except DownloadLimitExceeded as e:
-            log(__name__, "Download limit exceeded: {}".format(e))
-            error(__name__, 32004, e)
-            return
-        except (TooManyRequests, ServiceUnavailable, ProviderError, ValueError) as e:
-            log(__name__, "Download failed: {}".format(e))
-            error(__name__, 32001, e)
-            return
+        # v1.0.10: Try API download first, then fall back to direct website download
+        if subtitle_id:
+            try:
+                archive_content = self.subsro.download_subtitle(subtitle_id)
+                log(__name__, "API download OK: {} bytes".format(len(archive_content)))
+            except AuthenticationError as e:
+                error(__name__, 32003, e)
+                return
+            except DownloadLimitExceeded as e:
+                log(__name__, "Download limit exceeded: {}".format(e))
+                error(__name__, 32004, e)
+                return
+            except (TooManyRequests, ServiceUnavailable, ProviderError, ValueError) as e:
+                log(__name__, "API download failed for id={}: {}".format(subtitle_id, e))
+                # Don't return yet -- try downloadLink fallback below
+
+        # v1.0.10: Fallback to direct website download URL (from scraper results)
+        if not archive_content and download_link:
+            log(__name__, "Trying direct download from: {}".format(download_link))
+            try:
+                from requests import Session
+                dl_session = Session()
+                dl_session.headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "*/*",
+                    "Referer": "https://subs.ro/",
+                }
+                r = dl_session.get(download_link, timeout=20, allow_redirects=True)
+                log(__name__, "Direct download status: {} Content-Type: {}".format(
+                    r.status_code, r.headers.get("Content-Type", "unknown")))
+                r.raise_for_status()
+                if r.content and len(r.content) > 0:
+                    archive_content = r.content
+                    log(__name__, "Direct download OK: {} bytes".format(len(archive_content)))
+                else:
+                    log(__name__, "Direct download returned empty content")
+            except Exception as e:
+                log(__name__, "Direct download failed: {}".format(e))
 
         if not archive_content:
-            log(__name__, "No archive content received")
+            log(__name__, "No archive content from API or direct download")
             return
 
         # v1.0.8: Use os.path for directory operations instead of xbmcvfs.exists()
@@ -147,8 +174,6 @@ class SubtitleDownloader:
             dir_path = xbmc.translatePath("special://temp/subsro")
 
         # v1.0.8: Use os.path.isdir() instead of xbmcvfs.exists() for directories
-        # xbmcvfs.exists() requires trailing path separator for directories and
-        # returns False without it, causing cleanup to be skipped
         if os.path.isdir(dir_path):
             # Clean up old files
             try:
@@ -202,8 +227,14 @@ class SubtitleDownloader:
             # Instead, just return and let endOfDirectory signal no subtitle.
 
     def list_subtitles(self):
-        """Display subtitle results as Kodi ListItems."""
+        """Display subtitle results as Kodi ListItems.
+
+        v1.0.10: All text fields are decoded with html.unescape() before display.
+        Download URL includes downloadLink parameter for scraper fallback.
+        """
         if self.subtitles:
+            from urllib.parse import quote
+
             # v1.0.5: Get season/episode from query for passing to download URL
             season = self.query.get("season_number", "")
             episode = self.query.get("episode_number", "")
@@ -213,11 +244,12 @@ class SubtitleDownloader:
                 language_name = SUBSRO_TO_LANG.get(language_code, "Romanian")
                 flag_code = SUBSRO_TO_FLAG.get(language_code, "ro")
 
-                title = subtitle.get("title", "")
-                release = subtitle.get("release", "")
-                description = subtitle.get("description", "")
-                translator = subtitle.get("translator", "")
-                year = subtitle.get("year", "")
+                # v1.0.10: Decode HTML entities in ALL text fields
+                title = html.unescape(str(subtitle.get("title", "")))
+                release = html.unescape(str(subtitle.get("release", "")))
+                description = html.unescape(str(subtitle.get("description", "")))
+                translator = html.unescape(str(subtitle.get("translator", "")))
+                year = str(subtitle.get("year", ""))
 
                 # v1.0.5: Use description as fallback when release is empty
                 # (subs.ro API returns description but not release for TV shows)
@@ -248,15 +280,22 @@ class SubtitleDownloader:
                 list_item.setProperty("hearing_imp", "false")
 
                 subtitle_id = subtitle.get("id", "")
+                # v1.0.10: Include downloadLink in URL for scraper fallback download
+                download_link = subtitle.get("downloadLink", "")
+
                 # v1.0.5: Include season/episode in download URL for archive extraction
                 url = "plugin://{}/?action=download&id={}&language={}".format(
                     __scriptid__, subtitle_id, language_code
                 )
                 if season and episode:
                     url += "&season={}&episode={}".format(season, episode)
+                # v1.0.10: Pass downloadLink URL-encoded for scraper results
+                if download_link:
+                    url += "&downloadLink={}".format(quote(str(download_link), safe=""))
 
-                log(__name__, "Adding: {} - {} (id={})".format(
-                    language_name, clean_name, subtitle_id))
+                log(__name__, "Adding: {} - {} (id={}, source={})".format(
+                    language_name, clean_name, subtitle_id,
+                    subtitle.get("_source", "api")))
                 xbmcplugin.addDirectoryItem(
                     handle=self.handle, url=url, listitem=list_item, isFolder=False
                 )

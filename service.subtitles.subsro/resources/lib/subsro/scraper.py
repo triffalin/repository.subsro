@@ -19,9 +19,17 @@ Website structure discovered via analysis:
 - Download link: https://subs.ro/subtitrare/descarca/{slug}/{id}
 - IMDB link on page: //imdb.com/title/{tt_id}
 - Flag images: https://cdn.subs.ro/img/flags/flag-{lang}-big.png
-- AJAX search: https://subs.ro/ajax/search/ (POST)
+- IMDB browse: https://subs.ro/subtitrari/imdbid/{numeric_imdb_id}
+
+v1.0.10: Major rewrite:
+- Extract actual title text from HTML anchor tags (not just URL slugs)
+- html.unescape() applied to ALL extracted text fields
+- Season/episode context filtering in search results
+- Download count extraction for proper ranking
+- Proper downloadLink field for fallback download
 """
 
+import html
 import re
 
 from resources.lib.utilities import log
@@ -51,6 +59,24 @@ def _log(msg):
     return log(__name__, msg)
 
 
+def _unescape(text):
+    """Decode HTML entities and clean up text.
+
+    Handles both named (&amp;) and numeric (&#x22; &#39;) entities.
+    Returns clean plain text safe for display in Kodi.
+    """
+    if not text:
+        return text
+    try:
+        # html.unescape handles all standard HTML entities:
+        # &#x22; -> "   &#x27; -> '   &amp; -> &   &lt; -> <   etc.
+        decoded = html.unescape(str(text))
+        # Strip leading/trailing whitespace
+        return decoded.strip()
+    except Exception:
+        return str(text).strip()
+
+
 class SubsroScraper:
     """
     Web scraper for subs.ro website.
@@ -67,24 +93,14 @@ class SubsroScraper:
             session: Optional requests.Session to reuse (for connection pooling).
                      If None, creates a new session without API key headers.
         """
-        if session:
-            # Create a separate session for scraping (different headers)
-            from requests import Session
-            self.session = Session()
-            # Do NOT send API key headers to website -- only to API
-            self.session.headers = {
-                "User-Agent": SCRAPE_USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8",
-            }
-        else:
-            from requests import Session
-            self.session = Session()
-            self.session.headers = {
-                "User-Agent": SCRAPE_USER_AGENT,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8",
-            }
+        # Always create a separate session for scraping (different headers than API)
+        from requests import Session
+        self.session = Session()
+        self.session.headers = {
+            "User-Agent": SCRAPE_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ro-RO,ro;q=0.9,en;q=0.8",
+        }
 
     def search(self, query):
         """
@@ -92,8 +108,7 @@ class SubsroScraper:
 
         Tries multiple strategies:
         1. Search by IMDB ID (browse the film/show page)
-        2. Search by title via AJAX search endpoint
-        3. Search by title via Google-style URL guess
+        2. Search by title via URL slug guess
 
         Args:
             query: Dict with media_data (same format as provider.py receives)
@@ -111,15 +126,21 @@ class SubsroScraper:
         """Internal search implementation."""
         results = []
 
-        # Try IMDB ID first (most reliable)
+        # Try IMDB ID first (most reliable -- confirmed working URL pattern)
         imdb_id = self._get_imdb_id(query)
         if imdb_id:
-            _log("Scraper: trying IMDB ID {}".format(imdb_id))
-            results = self._search_by_imdb(imdb_id)
+            # v1.0.10: The website URL uses numeric IMDB ID WITHOUT 'tt' prefix
+            # https://subs.ro/subtitrari/imdbid/0413573 (NOT tt0413573)
+            numeric_imdb = imdb_id
+            if numeric_imdb.startswith("tt"):
+                numeric_imdb = numeric_imdb[2:]
+            _log("Scraper: trying IMDB ID {} (numeric: {})".format(imdb_id, numeric_imdb))
+            results = self._search_by_imdb(numeric_imdb)
             if results:
+                _log("Scraper: IMDB search returned {} results".format(len(results)))
                 return results
 
-        # Try title search via browsing
+        # Try title search via URL slug
         title = query.get("query", "")
         if title:
             _log("Scraper: trying title search '{}'".format(title))
@@ -141,73 +162,42 @@ class SubsroScraper:
                     return "tt{}".format(s.zfill(7))
         return None
 
-    def _search_by_imdb(self, imdb_id):
+    def _search_by_imdb(self, numeric_imdb_id):
         """
-        Search subs.ro by IMDB ID.
+        Search subs.ro by numeric IMDB ID.
 
-        Tries multiple URL patterns:
-        1. https://subs.ro/subtitrari/imdbid/{tt_id} (discovered in HTML links)
-        2. https://subs.ro/film/{tt_id} (alternative pattern)
+        Confirmed URL pattern: https://subs.ro/subtitrari/imdbid/{numeric_id}
+        Example: https://subs.ro/subtitrari/imdbid/0413573 for Grey's Anatomy
         """
-        results = []
-
-        # Try multiple URL patterns
-        urls_to_try = [
-            "{}/subtitrari/imdbid/{}".format(SUBS_RO_BASE, imdb_id),
-        ]
-
-        for url in urls_to_try:
-            _log("Scraper: fetching {}".format(url))
-            html = self._fetch_page(url)
-            if html:
-                parsed = self._parse_subtitle_listing(html)
-                if parsed:
-                    results.extend(parsed)
-                    _log("Scraper: found {} results from {}".format(len(parsed), url))
-                    break
-
-        return results
+        url = "{}/subtitrari/imdbid/{}".format(SUBS_RO_BASE, numeric_imdb_id)
+        _log("Scraper: fetching {}".format(url))
+        page_html = self._fetch_page(url)
+        if page_html:
+            parsed = self._parse_subtitle_listing(page_html)
+            if parsed:
+                _log("Scraper: found {} results from {}".format(len(parsed), url))
+                return parsed
+        return []
 
     def _search_by_title(self, title):
         """
-        Search subs.ro by title.
+        Search subs.ro by title using URL slug pattern.
 
-        Uses the AJAX search endpoint discovered on the advanced search page.
-        Falls back to URL pattern guessing.
+        v1.0.10: Removed AJAX search (endpoint returns "He's dead, Jim!" error).
+        Only uses URL slug browsing which is confirmed to work.
         """
         results = []
 
-        # Strategy 1: Try AJAX search endpoint
-        try:
-            ajax_url = "{}/ajax/search/".format(SUBS_RO_BASE)
-            _log("Scraper: AJAX search for '{}'".format(title))
-            r = self.session.post(
-                ajax_url,
-                data={"q": title},
-                timeout=SCRAPE_TIMEOUT,
-                headers={
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": "{}/cautare".format(SUBS_RO_BASE),
-                }
-            )
-            if r.status_code == 200 and r.text:
-                parsed = self._parse_ajax_search(r.text, title)
-                if parsed:
-                    return parsed
-        except Exception as e:
-            _log("Scraper: AJAX search failed: {}".format(e))
-
-        # Strategy 2: Try URL slug pattern
         slug = self._title_to_slug(title)
         if slug:
-            # Try browsing the subtitle page directly
             urls_to_try = [
                 "{}/subtitrari/{}".format(SUBS_RO_BASE, slug),
             ]
             for url in urls_to_try:
-                html = self._fetch_page(url)
-                if html:
-                    parsed = self._parse_subtitle_listing(html)
+                _log("Scraper: fetching {}".format(url))
+                page_html = self._fetch_page(url)
+                if page_html:
+                    parsed = self._parse_subtitle_listing(page_html)
                     if parsed:
                         results.extend(parsed)
                         break
@@ -233,175 +223,195 @@ class SubsroScraper:
             _log("Scraper: fetch error: {}".format(e))
         return None
 
-    def _parse_subtitle_listing(self, html):
+    def _parse_subtitle_listing(self, page_html):
         """
         Parse subtitle entries from an HTML page.
 
-        Looks for the pattern discovered in website analysis:
-        - Subtitle links: /subtitrare/{slug}/{id}
-        - Download links: /subtitrare/descarca/{slug}/{id}
-        - Language flags: flag-{lang}-big.png
-        - IMDB links: //imdb.com/title/{tt_id}
+        v1.0.10: Complete rewrite to extract ACTUAL title text from HTML,
+        not just URL slugs. Also extracts download counts for ranking.
+
+        The subs.ro listing page has this structure per subtitle entry:
+        - View link: <a href="/subtitrare/{slug}/{id}">Title Text</a>
+        - Download link: <a href="/subtitrare/descarca/{slug}/{id}">...</a>
+        - Language flag: <img src="...flag-{lang}-big.png">
+        - Translator: "Traducator: Name"
+        - Downloads count: numeric text near the entry
 
         Returns list of dicts in same format as API response items.
         """
         results = []
+        seen_ids = set()
 
-        # Find all subtitle entry links: /subtitrare/{slug}/{id}
-        # Pattern matches both the subtitle page link and download link
-        subtitle_pattern = re.compile(
-            r'href="(?:https?://subs\.ro)?/subtitrare/([^"/]+)/(\d+)"',
-            re.IGNORECASE
-        )
+        # v1.0.10: Extract title text from subtitle page links (NOT download links)
+        # Pattern: <a href="/subtitrare/{slug}/{id}" ...>{title text}</a>
+        # This captures the ACTUAL displayed title including proper characters.
+        # We use a two-step approach:
+        # 1. Find all /subtitrare/{slug}/{id} links and extract {slug} and {id}
+        # 2. Try to find the displayed title text near these links
+        # 3. Also find /subtitrare/descarca/{slug}/{id} download links
 
-        # Find all download links: /subtitrare/descarca/{slug}/{id}
+        # First, collect all subtitle IDs and their slugs from download links
         download_pattern = re.compile(
             r'href="(?:https?://subs\.ro)?/subtitrare/descarca/([^"/]+)/(\d+)"',
             re.IGNORECASE
         )
 
-        # Find language flags: flag-{lang}-big.png
+        # Also collect subtitle page links with their anchor text
+        # This regex captures: href="..." followed by optional attributes, then >title text</a>
+        title_link_pattern = re.compile(
+            r'<a[^>]*href="(?:https?://subs\.ro)?/subtitrare/([^"/]+)/(\d+)"[^>]*>'
+            r'([^<]*(?:<(?!/a)[^<]*)*)</a>',
+            re.IGNORECASE | re.DOTALL
+        )
+
+        # Language flags: flag-{lang}-big.png
         flag_pattern = re.compile(
             r'flag-(\w+)-big\.png',
             re.IGNORECASE
         )
 
-        # Collect unique subtitle IDs with their metadata
-        seen_ids = set()
+        # Download count pattern (number with optional comma separator)
+        downloads_pattern = re.compile(
+            r'(\d[\d,.]*)\s*(?:descarcari|desc\.|downloads?)',
+            re.IGNORECASE
+        )
 
-        # Method 1: Find subtitle entries via download links (most reliable)
-        for match in download_pattern.finditer(html):
+        # Build a map of subtitle_id -> {slug, title_text, download_url}
+        # from all the links found on the page
+        subtitle_data = {}
+
+        # Step 1: Find all title links (subtitle page links with anchor text)
+        for match in title_link_pattern.finditer(page_html):
             slug = match.group(1)
             sub_id = match.group(2)
 
+            # Skip download links (slug = "descarca")
+            if slug == "descarca":
+                continue
+
+            # Extract and clean anchor text
+            raw_title = match.group(3)
+            # Remove any inner HTML tags
+            clean_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+            # Decode HTML entities
+            clean_title = _unescape(clean_title)
+
+            if sub_id not in subtitle_data:
+                subtitle_data[sub_id] = {
+                    "slug": slug,
+                    "title": clean_title,
+                    "has_download": False,
+                }
+            elif clean_title and not subtitle_data[sub_id].get("title"):
+                subtitle_data[sub_id]["title"] = clean_title
+
+        # Step 2: Find all download links and mark which IDs have download URLs
+        for match in download_pattern.finditer(page_html):
+            slug = match.group(1)
+            sub_id = match.group(2)
+
+            if sub_id not in subtitle_data:
+                subtitle_data[sub_id] = {
+                    "slug": slug,
+                    "title": "",
+                    "has_download": True,
+                }
+            else:
+                subtitle_data[sub_id]["has_download"] = True
+
+        _log("Scraper: found {} unique subtitle IDs in HTML".format(len(subtitle_data)))
+
+        # Step 3: For each subtitle, extract context metadata (language, translator, downloads)
+        for sub_id, data in subtitle_data.items():
             if sub_id in seen_ids:
                 continue
             seen_ids.add(sub_id)
 
-            # Extract title from slug (e.g., "shelter-2026" -> "Shelter (2026)")
-            title = self._slug_to_title(slug)
+            slug = data["slug"]
+            title = data.get("title", "") or self._slug_to_title(slug)
 
-            # Try to find language flag near this match
-            # Look at surrounding context (500 chars before and after)
-            start = max(0, match.start() - 500)
-            end = min(len(html), match.end() + 500)
-            context = html[start:end]
+            # Find the position of this subtitle ID in the HTML for context extraction
+            # Search for the subtitle link or download link
+            id_pattern = re.compile(
+                r'/subtitrare/(?:descarca/)?[^"/]+/{}'.format(re.escape(sub_id)),
+                re.IGNORECASE
+            )
+            id_match = id_pattern.search(page_html)
 
             language = "ro"  # Default to Romanian
-            flag_match = flag_pattern.search(context)
-            if flag_match:
-                flag_code = flag_match.group(1).lower()
-                language = FLAG_TO_LANG.get(flag_code, "ro")
-
-            # Try to find translator in context
             translator = ""
-            trans_match = re.search(
-                r'(?:Traduc[aă]tor|Translator)\s*:\s*([^<\n]+)',
-                context, re.IGNORECASE
-            )
-            if trans_match:
-                translator = trans_match.group(1).strip()
+            downloads = 0
+
+            if id_match:
+                # Extract context: 800 chars before and after the match
+                start = max(0, id_match.start() - 800)
+                end = min(len(page_html), id_match.end() + 800)
+                context = page_html[start:end]
+
+                # Language from flag
+                flag_match = flag_pattern.search(context)
+                if flag_match:
+                    flag_code = flag_match.group(1).lower()
+                    language = FLAG_TO_LANG.get(flag_code, "ro")
+
+                # Translator
+                trans_match = re.search(
+                    r'(?:Traduc[aă]tor|Translator)\s*:\s*([^<\n]+)',
+                    context, re.IGNORECASE
+                )
+                if trans_match:
+                    translator = _unescape(trans_match.group(1).strip())
+
+                # Download count
+                dl_match = downloads_pattern.search(context)
+                if dl_match:
+                    try:
+                        downloads = int(dl_match.group(1).replace(",", "").replace(".", ""))
+                    except (ValueError, TypeError):
+                        downloads = 0
+
+            # Build download URL
+            download_url = "{}/subtitrare/descarca/{}/{}".format(
+                SUBS_RO_BASE, slug, sub_id)
+
+            # Extract year from slug or title
+            year = ""
+            year_match = re.search(r'\((\d{4})\)', title)
+            if year_match:
+                year = year_match.group(1)
+            else:
+                slug_year = re.search(r'-(\d{4})$', slug)
+                if slug_year:
+                    year = slug_year.group(1)
+
+            # v1.0.10: Build description from title for TV filter matching
+            # The TV filter in provider.py searches title + description for
+            # season/episode patterns like "Sezonul 1", "S01E01", etc.
+            description = _unescape(title)
 
             # Build result in same format as API
             result = {
                 "id": int(sub_id),
                 "title": title,
-                "description": slug,
+                "description": description,
                 "language": language,
                 "translator": translator,
-                "type": "movie",
-                "downloadLink": "{}/subtitrare/descarca/{}/{}".format(
-                    SUBS_RO_BASE, slug, sub_id),
+                "downloads": downloads,
+                "year": year,
+                "type": "subtitle",
+                "downloadLink": download_url,
                 "link": "{}/subtitrare/{}/{}".format(
                     SUBS_RO_BASE, slug, sub_id),
                 "_source": "scraper",
             }
             results.append(result)
 
-        # Method 2: If no download links found, try subtitle page links
-        if not results:
-            for match in subtitle_pattern.finditer(html):
-                slug = match.group(1)
-                sub_id = match.group(2)
-
-                if sub_id in seen_ids:
-                    continue
-                if slug == "descarca":
-                    continue
-                seen_ids.add(sub_id)
-
-                title = self._slug_to_title(slug)
-
-                # Look for language in nearby context
-                start = max(0, match.start() - 300)
-                end = min(len(html), match.end() + 300)
-                context = html[start:end]
-
-                language = "ro"
-                flag_match = flag_pattern.search(context)
-                if flag_match:
-                    flag_code = flag_match.group(1).lower()
-                    language = FLAG_TO_LANG.get(flag_code, "ro")
-
-                result = {
-                    "id": int(sub_id),
-                    "title": title,
-                    "description": slug,
-                    "language": language,
-                    "translator": "",
-                    "type": "movie",
-                    "link": "{}/subtitrare/{}/{}".format(
-                        SUBS_RO_BASE, slug, sub_id),
-                    "_source": "scraper",
-                }
-                results.append(result)
-
         if results:
             _log("Scraper: parsed {} subtitle entries from HTML".format(len(results)))
-
-        return results
-
-    def _parse_ajax_search(self, response_text, search_title):
-        """
-        Parse AJAX search response.
-
-        The AJAX endpoint may return HTML fragments or JSON.
-        We try to parse both formats.
-        """
-        results = []
-
-        # Try as HTML fragment first
-        if "<" in response_text:
-            parsed = self._parse_subtitle_listing(response_text)
-            if parsed:
-                return parsed
-
-        # Try as JSON
-        try:
-            import json
-            data = json.loads(response_text)
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict):
-                        # Normalize to our format
-                        result = {
-                            "id": item.get("id", 0),
-                            "title": item.get("title", ""),
-                            "description": item.get("description", ""),
-                            "language": item.get("language", "ro"),
-                            "translator": item.get("translator", ""),
-                            "type": item.get("type", "movie"),
-                            "_source": "scraper_ajax",
-                        }
-                        if result["id"]:
-                            results.append(result)
-            elif isinstance(data, dict) and "items" in data:
-                for item in data["items"]:
-                    if isinstance(item, dict):
-                        item["_source"] = "scraper_ajax"
-                        results.append(item)
-        except (ValueError, KeyError):
-            pass
+            # Log first few for debugging
+            for i, r in enumerate(results[:3]):
+                _log("Scraper result[{}]: id={} title='{}' lang='{}' dl={}".format(
+                    i, r["id"], r["title"][:80], r["language"], r["downloads"]))
 
         return results
 
@@ -422,19 +432,37 @@ class SubsroScraper:
     def _slug_to_title(self, slug):
         """
         Convert a URL slug back to a readable title.
+        Only used as fallback when anchor text extraction fails.
+
+        v1.0.10: Also handles slugs with encoded entities like
+        'x22grey-x27s-anatomy-x22-2005' by stripping x22/x27 prefixes.
 
         E.g., "shelter-2026" -> "Shelter (2026)"
-             "breaking-bad" -> "Breaking Bad"
+             "grey-s-anatomy-sezonul-1-2005" -> "Grey S Anatomy Sezonul 1 (2005)"
         """
         if not slug:
             return ""
 
+        # v1.0.10: Clean up URL-encoded entity fragments
+        # Some slugs contain 'x22' (") and 'x27' (') from HTML entities
+        # e.g., "x22grey-x27s-anatomy-x22-2005"
+        cleaned = slug
+        # Remove x22 (double quote entity fragment) at word boundaries
+        cleaned = re.sub(r'(?:^|(?<=-))x22(?=-|$)', '', cleaned)
+        # Replace x27 (apostrophe entity fragment) with nothing
+        cleaned = re.sub(r'x27', '', cleaned)
+        # Clean up resulting double/triple hyphens
+        cleaned = re.sub(r'-+', '-', cleaned).strip('-')
+
+        if not cleaned:
+            cleaned = slug
+
         # Check if slug ends with a year
-        year_match = re.search(r"-(\d{4})$", slug)
+        year_match = re.search(r"-(\d{4})$", cleaned)
         if year_match:
             year = year_match.group(1)
-            name_part = slug[:year_match.start()]
+            name_part = cleaned[:year_match.start()]
             title_words = name_part.replace("-", " ").title()
             return "{} ({})".format(title_words, year)
         else:
-            return slug.replace("-", " ").title()
+            return cleaned.replace("-", " ").title()

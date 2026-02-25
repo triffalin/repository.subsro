@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <addon id="service.subtitles.subsro"
        name="Subs.ro"
-       version="1.0.9"
+       version="1.0.10"
        provider-name="subs.ro">
 	<requires>
 		<import addon="xbmc.python" version="3.0.0"/>
@@ -16,52 +16,48 @@
 		<description lang="ro_RO">Cauta si descarca subtitrari de pe Subs.ro - cea mai mare baza de date de subtitrari romanesti. Suporta romana, engleza, italiana, franceza, germana, maghiara, greaca, portugheza si spaniola. Inregistreaza-te pe subs.ro pentru a obtine o cheie API.</description>
 		<disclaimer lang="en_GB">Users need to provide a subs.ro API key in add-on configuration. You can generate an API key from your subs.ro user profile.</disclaimer>
 		<news>
+v1.0.10 (2026-02-25)
+- CRITICAL FIX: Scraper results now display clean titles (html.unescape applied)
+  Previously showed raw HTML entities like &amp;#x22;Grey&amp;#x27;s Anatomy&amp;#x22;
+- CRITICAL FIX: Download now works for scraper results (dual download path)
+  API download tried first with subtitle ID; if that fails, falls back to
+  direct website download URL (downloadLink) from scraper results
+- FIX: Scraper extracts ACTUAL title text from HTML anchor tags
+  Previously used URL slugs which produced garbled titles
+- FIX: TV season filter now matches scraper results properly
+  Scraper titles now contain "Sezonul 1", "Sezoanele 1-22" etc.
+- FIX: Multi-season packs ("Sezoanele 1-22") now matched by TV filter
+  New regex detects season range and checks if requested season is within
+- FIX: Scraper extracts download counts for proper result ranking
+- FIX: Scraper cleans URL slugs with entity fragments (x22, x27)
+- FIX: All text fields decoded with html.unescape() in list_subtitles()
+- FIX: AJAX search removed (endpoint returns error, wastes time)
+- Keep: All v1.0.3 through v1.0.9 fixes preserved
+
 v1.0.9 (2026-02-24)
 - CRITICAL FIX: Download action was NEVER executed -- THE root cause of "Attempt failed"
-  get_params() in utilities.py did sys.argv[2][1:] to strip the leading '?'.
-  This works for search: sys.argv[2] = "?action=search&amp;languages=Romanian"
-  But for download, Kodi passes the FULL plugin URL from the search result:
-  sys.argv[2] = "plugin://service.subtitles.subsro/?action=download&amp;id=123&amp;..."
-  Stripping [1:] removed 'p' from 'plugin://', producing garbage:
-  "lugin://service.subtitles.subsro/?action=download&amp;id=123"
-  parse_qsl() then created key "lugin://service.subtitles.subsro/?action"
-  instead of "action", so params.get("action") returned None.
-  handle_action() did nothing, endOfDirectory was called with no subtitle,
-  and Kodi showed "Attempt failed".
-  Fix: get_params() now finds the '?' character and parses everything after it,
-  correctly handling both "?action=search&amp;..." and "plugin://.../?action=download&amp;..."
-- Keep: All v1.0.3 through v1.0.8 fixes preserved
+  get_params() now finds '?' and parses everything after it correctly
 
 v1.0.8 (2026-02-24)
 - Fix: download_subtitle() headers changed to Accept: */* for binary download
 - Fix: download() error handling no longer passes phantom path to Kodi
 - Fix: archive_content initialized before try block (UnboundLocalError prevention)
 - Fix: Directory cleanup uses os.path.isdir() not xbmcvfs.exists()
-- Fix: Empty subtitle_id early detection
-- Fix: JSON response detection on download endpoint
-- Fix: Raw content fallback when extraction returns None
 
 v1.0.7 (2026-02-24)
 - Aligned API calls with official subs.ro Stremio addon behavior
 - TV show filtering returns ALL results when no S01E05 match (Stremio-style)
 - Web scraping fallback (Strategy 11) when API returns no results
-- Language-specific search is now fallback, not primary strategy
 
 v1.0.6 (2026-02-24)
 - Multi-strategy cascading search engine (up to 10 strategies per search)
-- Search by episode title/name, original title, release/filename
-- Result ranking by language priority and download count
-- Result deduplication by subtitle ID
 
 v1.0.5 (2026-02-24)
 - TV show/series subtitle search rewrite with parent/episode IMDB IDs
 - Episode-aware archive extraction picks correct S01E05 from multi-episode ZIPs
-- Season/episode passed through download URL to archive extractor
 
 v1.0.4 (2026-02-23)
 - IMDB IDs sent with required 'tt' prefix
-- API response reads 'items' field (not 'results')
-- Fallback search without language filter and title-based search
 
 v1.0.3 (2026-02-23)
 - Unsupported language codes no longer cause HTTP 400

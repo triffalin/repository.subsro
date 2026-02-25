@@ -12,7 +12,7 @@ API_SEARCH = "/search/{field}/{value}"
 API_DOWNLOAD = "/subtitle/{id}/download"
 API_QUOTA = "/quota"
 
-USER_AGENT = "Kodi Subs.ro v1.0.8"
+USER_AGENT = "Kodi Subs.ro v1.0.10"
 CONTENT_TYPE = "application/json"
 REQUEST_TIMEOUT = 30
 
@@ -167,7 +167,7 @@ class SubsroProvider:
         Returns:
             List of subtitle result dicts, or None if none found.
         """
-        logging("=== v1.0.8 Stremio-Aligned Search ===")
+        logging("=== v1.0.10 Stremio-Aligned Search ===")
         logging("Query: %s" % query)
 
         is_tv_show = bool(query.get("tv_show_title"))
@@ -366,6 +366,7 @@ class SubsroProvider:
                     len(all_results)))
 
         # Filter by season/episode for TV shows
+        # v1.0.10: This applies to BOTH API results and scraper results
         if is_tv_show and season and episode:
             all_results = self._filter_tv_results(
                 all_results, season, episode,
@@ -501,6 +502,9 @@ class SubsroProvider:
         Filter TV show results by season/episode number.
 
         v1.0.7: Relaxed filtering to match Stremio approach.
+        v1.0.10: Works correctly with scraper results which now have
+        proper title text (e.g., "Grey's Anatomy - Sezonul 1 (2005)")
+        instead of raw slugs.
 
         KEY INSIGHT from Stremio addon:
         The Stremio addon does NOT filter API results at all for TV shows.
@@ -518,7 +522,7 @@ class SubsroProvider:
         Strategy:
         1. Check 'title' and 'description' for S01E05 / 1x05 patterns
         2. Check for episode title/name match in title or description
-        3. Check for season-only match (e.g., "Season 1" or "S01")
+        3. Check for season-only match (e.g., "Season 1" or "S01" or "Sezonul 1")
         4. If no matches at any level, return ALL results
            v1.0.7: This is the KEY change - always return results even if
            no season/episode pattern found. Let archive extraction handle it.
@@ -565,6 +569,13 @@ class SubsroProvider:
             r"\b0?{s}[xX]\d".format(s=season_int),          # 1x (any episode)
         ]
 
+        # v1.0.10: Also match "Sezoanele X-Y" (multi-season packs) that include our season
+        # e.g., "Sezoanele 1-22" matches season 1 through 22
+        multi_season_pattern = re.compile(
+            r"[Ss]ezo(?:a)?ne(?:le)?\s*(\d+)\s*-\s*(\d+)",
+            re.IGNORECASE
+        )
+
         # Prepare episode title for matching (if available)
         episode_title_lower = episode_title.lower().strip() if episode_title else None
         # Only use episode title matching if title is long enough to be meaningful
@@ -606,12 +617,29 @@ class SubsroProvider:
                     continue
 
             # 3. Try season-only match
+            found_season = False
             for pattern in season_only_patterns:
                 if re.search(pattern, searchable_text):
                     season_matches.append(result)
+                    found_season = True
                     logging("TV filter: SEASON match for S{:02d} in '{}'".format(
                         season_int, result.get("title", "")[:80]))
                     break
+
+            # v1.0.10: Check multi-season packs (e.g., "Sezoanele 1-22")
+            if not found_season:
+                multi_match = multi_season_pattern.search(searchable_text)
+                if multi_match:
+                    try:
+                        range_start = int(multi_match.group(1))
+                        range_end = int(multi_match.group(2))
+                        if range_start <= season_int <= range_end:
+                            season_matches.append(result)
+                            logging("TV filter: MULTI-SEASON match S{:02d} in range {}-{}: '{}'".format(
+                                season_int, range_start, range_end,
+                                result.get("title", "")[:80]))
+                    except (ValueError, TypeError):
+                        pass
 
         # Return results with cascading priority:
         # 1. Exact episode matches (best)
